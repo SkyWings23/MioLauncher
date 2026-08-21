@@ -42,7 +42,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -66,6 +65,8 @@ private val MioGreen = Color(0xFF4CAF50)
 
 @Composable
 fun HomeScreen(
+    selectedVersionId: String?,
+    onSelectVersion: (String) -> Unit,
     onLaunch: (GameVersion) -> Unit = {},
     onNavigateToTab: (Int) -> Unit = {},
     onOpenDownloadTab: (Int) -> Unit = {},
@@ -74,7 +75,6 @@ fun HomeScreen(
     val context = LocalContext.current
     var installedVersions by remember { mutableStateOf<List<GameVersion>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
-    var selectedIdx by remember { mutableIntStateOf(0) }
     var showSwitcher by remember { mutableStateOf(false) }
     var showOfflineDialog by remember { mutableStateOf(false) }
     var showVersionSettingsDialog by remember { mutableStateOf(false) }
@@ -89,7 +89,13 @@ fun HomeScreen(
         loading = false
     }
 
-    val selectedVersion = installedVersions.getOrNull(selectedIdx)
+    val selectedVersion = installedVersions.firstOrNull { it.id == selectedVersionId }
+        ?: installedVersions.firstOrNull()
+
+    fun selectVersion(ver: GameVersion?) {
+        if (ver != null) onSelectVersion(ver.id)
+        showSwitcher = false
+    }
 
     fun play(version: GameVersion) {
         val has = GameLauncher.hasAccount(context)
@@ -116,9 +122,8 @@ fun HomeScreen(
             allVersions = installedVersions,
             showSwitcher = showSwitcher,
             onSwitcherToggle = { showSwitcher = !showSwitcher },
-            onVersionSelected = { idx ->
-                selectedIdx = idx
-                showSwitcher = false
+            onVersionSelected = { ver ->
+                selectVersion(ver)
             },
             onPlayClick = { selectedVersion?.let(::play) },
             onSettingsClick = { showVersionSettingsDialog = true },
@@ -132,12 +137,12 @@ fun HomeScreen(
                 fontWeight = FontWeight.Bold,
             )
             Spacer(Modifier.height(12.dp))
-            installedVersions.forEachIndexed { idx, ver ->
+            installedVersions.forEach { ver ->
                 InstalledVersionRow(
                     version = ver,
-                    isCurrent = idx == selectedIdx,
+                    isCurrent = ver.id == selectedVersion?.id,
                     onPlayClick = { play(ver) },
-                    onSelect = { selectedIdx = idx },
+                    onSelect = { selectVersion(ver) },
                 )
                 Spacer(Modifier.height(8.dp))
             }
@@ -284,7 +289,7 @@ private fun VersionCard(
     allVersions: List<GameVersion>,
     showSwitcher: Boolean,
     onSwitcherToggle: () -> Unit,
-    onVersionSelected: (Int) -> Unit,
+    onVersionSelected: (GameVersion) -> Unit,
     onPlayClick: () -> Unit,
     onSettingsClick: () -> Unit = {},
 ) {
@@ -395,7 +400,7 @@ private fun VersionCard(
                                 }
                             }
                         },
-                        onClick = { onVersionSelected(idx) },
+                        onClick = { onVersionSelected(ver) },
                         leadingIcon = if (idx == allVersions.indexOf(version)) {
                             { Icon(Icons.Filled.CheckCircle, null, tint = MioGreen, modifier = Modifier.size(20.dp)) }
                         } else null,

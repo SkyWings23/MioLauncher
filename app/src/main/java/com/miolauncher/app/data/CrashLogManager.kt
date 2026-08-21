@@ -29,9 +29,11 @@ object CrashLogManager {
         File(gameDir(context), "crash-reports").listFiles { f -> f.isFile && f.name.startsWith("crash-") }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
 
-    /** 最新的 JVM 错误日志（hs_err_pid*.log） */
+    /** 最新的 JVM 错误日志（hs_err_<pid>.log 或 hs_err_pid<pid>.log） */
     fun hsErrFiles(context: Context): List<File> =
-        gameDir(context).listFiles { f -> f.isFile && f.name.startsWith("hs_err_pid") }
+        gameDir(context).listFiles { f ->
+            f.isFile && (f.name.startsWith("hs_err_pid") || f.name.matches(Regex("hs_err_\\d+\\.log")))
+        }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
 
     /** 现有崩溃证据中最新文件的时间戳（无则 0） */

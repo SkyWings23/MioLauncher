@@ -14,6 +14,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -76,10 +77,15 @@ fun MioApp() {
     var currentTab by rememberSaveable { mutableStateOf(MainTab.HOME) }
     var darkTheme by rememberSaveable { mutableStateOf(true) }
     var downloadTab by rememberSaveable { mutableIntStateOf(0) }
+    var resourceTab by rememberSaveable { mutableIntStateOf(0) }
+    val context = LocalContext.current
+    // 当前选中的游戏版本：提升到最外层持久化，跨 tab 切换/应用重启不丢失
+    var selectedVersionId by rememberSaveable {
+        mutableStateOf(com.miolauncher.app.data.GameVersionStore.get(context))
+    }
     var openLaunchSettings by remember { mutableStateOf(false) }
     val versionListViewModel: com.miolauncher.app.viewmodel.VersionListViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel()
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var launching by remember { mutableStateOf(false) }
     // 启动失败原因（Java 不兼容等）→ App 内自定义弹窗完整展示，避免系统 Toast 显示不全
@@ -214,6 +220,11 @@ fun MioApp() {
                 ) {
                     when (currentTab) {
                         MainTab.HOME -> HomeScreen(
+                            selectedVersionId = selectedVersionId,
+                            onSelectVersion = { id ->
+                                selectedVersionId = id
+                                com.miolauncher.app.data.GameVersionStore.set(context, id)
+                            },
                             onLaunch = ::launchVersion,
                             onNavigateToTab = { idx ->
                                 currentTab = MainTab.entries[idx]
@@ -227,8 +238,21 @@ fun MioApp() {
                                 currentTab = MainTab.PROFILE
                             },
                         )
-                        MainTab.DOWNLOAD -> DownloadScreen(initialTab = downloadTab, versionListViewModel = versionListViewModel)
-                        MainTab.RESOURCE -> ResourceScreen()
+                        MainTab.DOWNLOAD -> DownloadScreen(
+                            selectedTab = downloadTab,
+                            onTabSelected = { downloadTab = it },
+                            versionListViewModel = versionListViewModel,
+                            selectedVersionId = selectedVersionId,
+                        )
+                        MainTab.RESOURCE -> ResourceScreen(
+                            selectedVersionId = selectedVersionId,
+                            onSelectVersion = { id ->
+                                selectedVersionId = id
+                                com.miolauncher.app.data.GameVersionStore.set(context, id)
+                            },
+                            selectedTab = resourceTab,
+                            onTabSelected = { resourceTab = it },
+                        )
                         MainTab.PROFILE -> ProfileScreen(
                             darkTheme = darkTheme,
                             onThemeChange = { darkTheme = it },
@@ -323,14 +347,39 @@ private fun CrashLogDialog(
             Spacer(Modifier.height(4.dp))
             Text(report.title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(10.dp))
-            // 自动诊断 + 处理建议
+
+            // 处理建议置顶展示（无需滚动即可看到）
+            val suggestions = com.miolauncher.backend.GameLogAnalyzer.summarizeSuggestions(diagnoses)
+            if (suggestions.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            MioGreen.copy(alpha = 0.10f),
+                            androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+                        )
+                        .padding(12.dp),
+                ) {
+                    Text("🛠 处理建议", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MioGreen)
+                    Spacer(Modifier.height(6.dp))
+                    suggestions.forEach { s ->
+                        Row(Modifier.padding(bottom = 4.dp), verticalAlignment = Alignment.Top) {
+                            Text("• ", fontWeight = FontWeight.Bold, color = MioGreen)
+                            Text(s, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+
+            // 详细诊断（滚动查看）
             if (diagnoses.isNotEmpty()) {
-                Text("🔍 自动诊断与处理建议", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MioGreen)
+                Text("🔍 详细诊断", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MioGreen)
                 Spacer(Modifier.height(6.dp))
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .height(140.dp)
+                        .height(120.dp)
                         .background(
                             MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                             androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
@@ -352,7 +401,7 @@ private fun CrashLogDialog(
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(180.dp)
+                    .height(140.dp)
                     .background(
                         MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                         androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
@@ -372,7 +421,10 @@ private fun CrashLogDialog(
             Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
                 androidx.compose.material3.Button(
                     onClick = {
-                        com.miolauncher.app.LogViewerActivity.start(context, report.title, report.combined, "crash.txt")
+                        val advice = if (suggestions.isNotEmpty())
+                            "===== MioLauncher 处理建议 =====\n\n" + suggestions.joinToString("\n") { "• $it" } + "\n\n"
+                        else ""
+                        com.miolauncher.app.LogViewerActivity.start(context, report.title, advice + report.combined, "crash.txt")
                         onDismiss()
                     },
                     modifier = Modifier.weight(1f),

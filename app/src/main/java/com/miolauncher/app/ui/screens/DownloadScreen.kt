@@ -86,9 +86,11 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadScreen(
-    initialTab: Int = 0,
+    selectedTab: Int = 0,
+    onTabSelected: (Int) -> Unit = {},
     versionListViewModel: VersionListViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
-) {    var tabIndex by remember { mutableIntStateOf(initialTab) }
+    selectedVersionId: String? = null,
+) {
     val tabs = listOf(com.miolauncher.app.ui.theme.I18n.tr("dl.tab_versions"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_mods"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_shaders"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_worlds"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_modpacks"))
 
     LaunchedEffect(Unit) {
@@ -130,13 +132,14 @@ fun DownloadScreen(
             runCatching { com.miolauncher.app.data.MioRepository(context).loadInstalledVersions() }.getOrDefault(emptyList())
         }
     }
-    val activeVersion = installedVersions.firstOrNull()
+    val activeVersion = installedVersions.firstOrNull { it.id == selectedVersionId }
+        ?: installedVersions.firstOrNull()
     val resourceCompat = remember(activeVersion?.id) {
         if (activeVersion == null) ResourceCompat(null, emptyList())
         else {
             val id = activeVersion.id
-            val loader = LoaderSuffix.entries.firstOrNull { id.endsWith("-$it.suffix") }
-            val base = if (loader != null) id.removeSuffix("-$loader.suffix") else id
+            val loader = LoaderSuffix.entries.firstOrNull { id.endsWith("-${it.suffix}") }
+            val base = if (loader != null) id.removeSuffix("-${loader.suffix}") else id
             ResourceCompat(base, if (loader != null) listOf(loader.modrinthName) else emptyList())
         }
     }
@@ -154,16 +157,16 @@ fun DownloadScreen(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                 )
                 PrimaryTabRow(
-                    selectedTabIndex = tabIndex,
+                    selectedTabIndex = selectedTab,
                     containerColor = MaterialTheme.colorScheme.background,
                     contentColor = MioGreen,
                 ) {
                     tabs.forEachIndexed { index, title ->
                         Tab(
-                            selected = tabIndex == index,
-                            onClick = { tabIndex = index },
+                            selected = selectedTab == index,
+                            onClick = { onTabSelected(index) },
                             text = {
-                                Text(title, fontWeight = if (tabIndex == index) FontWeight.Bold else FontWeight.Normal)
+                                Text(title, fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal)
                             },
                         )
                     }
@@ -180,7 +183,7 @@ fun DownloadScreen(
                     onInstalled = { detailItem = null },
                 )
             } else {
-                when (tabIndex) {
+                when (selectedTab) {
                     0 -> VersionDownloadList(
                         versions = versions,
                         loading = loading,

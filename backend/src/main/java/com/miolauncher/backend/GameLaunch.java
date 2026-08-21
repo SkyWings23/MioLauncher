@@ -17,7 +17,10 @@ import org.jackhuang.hmcl.util.platform.Platform;
 import java.io.File;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -188,6 +191,7 @@ public final class GameLaunch {
         File runtimeDir = JRE.getRuntimeDir(context);
         File lwjglJar = new File(runtimeDir, "lwjgl.jar");
         File mioLibPatcher = new File(runtimeDir, "MioLibPatcher.jar");
+        File mioExitAgent = new File(runtimeDir, "MioExitAgent.jar");
 
         // cacio 的 Toolkit.loadLibraries 需要 libawt_xawt.so（Pojav stub），
         // bionic JVM 只从 sun.boot.library.path（jreHome/lib）加载 java.desktop 原生库。
@@ -328,6 +332,14 @@ public final class GameLaunch {
             android.util.Log.w("MioGame", "write resolv.conf failed", e);
         }
         extra.add("-javaagent:" + mioLibPatcher.getAbsolutePath());
+        // MioLauncher: 干净退出清理 agent——游戏正常退出时删除崩溃标记，避免误报崩溃；
+        // 真实崩溃（信号）不跑 shutdown hook，标记保留供启动时检测。
+        if (mioExitAgent.isFile()) {
+            // 允许安装 SecurityManager（MioExitAgent 用它记录 System.exit 退出码以区分干净/异常退出）
+            extra.add("-Djava.security.manager=allow");
+            extra.add("-javaagent:" + mioExitAgent.getAbsolutePath());
+            extra.add("-Dmio.crash.marker=" + new File(context.getFilesDir(), "mio/game/.mio_crash_marker").getAbsolutePath());
+        }
         // 调试：DumpAgent 在 JVM 内轮询标记文件 dump 全部线程栈
         File dumpAgent = new File(runtimeDir, "DumpAgent.jar");
         if (dumpAgent.isFile()) {
@@ -364,7 +376,7 @@ public final class GameLaunch {
             } else if ("-cp".equals(arg) && i + 1 < src.size()) {
                 // 用 FCL 的 lwjgl.jar 前置 classpath，覆盖游戏自带 LWJGL
                 args.add(arg);
-                args.add(lwjglJar.getAbsolutePath() + java.io.File.pathSeparator + src.get(i + 1));
+                args.add(lwjglJar.getAbsolutePath() + java.io.File.pathSeparator + dedupeClasspath(src.get(i + 1)));
                 i++;
             } else {
                 args.add(arg);
@@ -379,10 +391,84 @@ public final class GameLaunch {
     }
 
     /**
+     * classpath 去重：同一 group:artifact 出现多个版本时只保留版本号最高的一个。
+     * 原因：Fabric Loader 的 Knot 会校验 classpath 不允许重复类（如 asm 9.6 与 9.10.1 并存直接拒绝启动）。
+     */
+    private static String dedupeClasspath(String classpath) {
+        if (classpath == null || classpath.isEmpty()) return classpath;
+        String sep = java.util.regex.Pattern.quote(java.io.File.pathSeparator);
+        String[] parts = classpath.split(sep);
+        Map<String, String> bestPath = new HashMap<>();   // key = group:artifact -> jar 路径
+        Map<String, String> bestVer = new HashMap<>();     // key = group:artifact -> 当前最高版本
+        Map<String, Integer> orderIdx = new HashMap<>();   // key = group:artifact -> 在结果中的下标
+        List<String> result = new ArrayList<>();
+        for (String p : parts) {
+            String coords = mavenCoords(p);
+            if (coords == null) { result.add(p); continue; }
+            int cut = coords.lastIndexOf(':');
+            String ga = coords.substring(0, cut);
+            String ver = coords.substring(cut + 1);
+            if (!bestPath.containsKey(ga)) {
+                bestPath.put(ga, p);
+                bestVer.put(ga, ver);
+                orderIdx.put(ga, result.size());
+                result.add(p);
+            } else if (compareVersion(ver, bestVer.get(ga)) > 0) {
+                bestVer.put(ga, ver);
+                result.set(orderIdx.get(ga), p);
+            }
+        }
+        return String.join(java.io.File.pathSeparator, result);
+    }
+
+    /** 从 maven 仓库路径提取 group:artifact:version，非标准路径返回 null。 */
+    private static String mavenCoords(String path) {
+        int idx = path.indexOf("/libraries/");
+        if (idx < 0) return null;
+        String tail = path.substring(idx + "/libraries/".length());
+        String[] seg = tail.split("/");
+        // 标准布局: <group...>/<artifact>/<version>/<artifact>-<version>[(-<classifier>)].jar
+        if (seg.length < 3) return null;
+        String fileName = seg[seg.length - 1];
+        String version = seg[seg.length - 2];
+        String artifact = seg[seg.length - 3];
+        if (!fileName.startsWith(artifact + "-")) return null;
+        StringBuilder group = new StringBuilder();
+        for (int i = 0; i < seg.length - 3; i++) {
+            if (i > 0) group.append('.');
+            group.append(seg[i]);
+        }
+        return group + ":" + artifact + ":" + version;
+    }
+
+    /** 版本号比较：数字段按数值，其余按字符串。 */
+    private static int compareVersion(String a, String b) {
+        String[] as = a.split("[\\.\\-]");
+        String[] bs = b.split("[\\.\\-]");
+        int n = Math.max(as.length, bs.length);
+        for (int i = 0; i < n; i++) {
+            String x = i < as.length ? as[i] : "";
+            String y = i < bs.length ? bs[i] : "";
+            if (x.equals(y)) continue;
+            Integer xi = parseIntOrNull(x), yi = parseIntOrNull(y);
+            if (xi != null && yi != null) {
+                if (!xi.equals(yi)) return xi.compareTo(yi);
+            } else {
+                int c = x.compareTo(y);
+                if (c != 0) return c;
+            }
+        }
+        return 0;
+    }
+
+    private static Integer parseIntOrNull(String s) {
+        try { return Integer.valueOf(s); } catch (Exception e) { return null; }
+    }
+
+    /**
      * 从启动命令行解析版本 ID（HMCL raw command 含 "--version <id>"）。
      */
-    private static String findVersionId(List<String> rawCommand) {
-        for (int i = 0; i < rawCommand.size() - 1; i++) {
+    private static String findVersionId(List<String> rawCommand) {        for (int i = 0; i < rawCommand.size() - 1; i++) {
             if ("--version".equals(rawCommand.get(i))) {
                 return rawCommand.get(i + 1);
             }

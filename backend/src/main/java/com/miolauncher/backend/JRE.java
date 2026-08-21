@@ -90,7 +90,7 @@ public final class JRE {
     public static void extractRuntime(Context context) throws Exception {
         File dir = getRuntimeDir(context);
         String[] files = {
-                "runtime/lwjgl.jar", "runtime/MioLibPatcher.jar", "runtime/DumpAgent.jar",
+                "runtime/lwjgl.jar", "runtime/MioLibPatcher.jar", "runtime/MioExitAgent.jar", "runtime/DumpAgent.jar",
                 "runtime/caciocavallo17/cacio-agent.jar",
                 "runtime/caciocavallo17/cacio-shared-1.19.1-SNAPSHOT.jar",
                 "runtime/caciocavallo17/cacio-tta-1.19.1-SNAPSHOT.jar"};
@@ -273,6 +273,12 @@ public final class JRE {
         long artVm = net.kdt.pojavlaunch.Tools.getJavaVMPointer();
         Os.setenv("DALVIK_JAVAVM", Long.toHexString(artVm), true);
         Os.setenv("DALVIK_APPLICATION", context.getPackageName(), true);
+
+        // MioLauncher: 把崩溃标记路径传给 native 退出钩子——游戏干净退出（code 0）时由
+        // nominal_exit 删除标记，避免正常退出后下次启动误报崩溃。
+        if (workDir != null) {
+            Os.setenv("MIO_CRASH_MARKER", new File(workDir, ".mio_crash_marker").getAbsolutePath(), true);
+        }
 
         // 预加载 JVM 运行所需的核心库，使后续 dlopen("libjli.so") 能找到。
         String jre = jreHome.getAbsolutePath();

@@ -22,6 +22,17 @@ static volatile jclass exitTrap_exitClass;
 static volatile jmethodID exitTrap_staticMethod;
 static JavaVM *exitTrap_jvm;
 
+// MioLauncher: 干净退出（进程调用 exit()）时删除崩溃标记。
+// 正常退出游戏 → JVM System.exit(0) → libc exit() → 运行 atexit 清理 → 标记删除。
+// 真实崩溃（SIGSEGV/SIGABRT/SIGKILL 等信号）不会运行 atexit → 标记保留，启动时仍可检测。
+static void clean_exit_delete_marker(void) {
+    const char* marker = getenv("MIO_CRASH_MARKER");
+    if(marker != NULL && *marker != '\0') {
+        if(remove(marker) == 0) LOGI("atexit: removed crash marker %s", marker);
+        else LOGI("atexit: remove marker %s failed: %s", marker, strerror(errno));
+    }
+}
+
 static int pfd[2];
 static pthread_t logger;
 static jmethodID logger_onEventLogged;
@@ -102,6 +113,15 @@ Java_net_kdt_pojavlaunch_Logger_begin(JNIEnv *env, __attribute((unused)) jclass 
 }
 
 _Noreturn void nominal_exit(int code, bool is_signal) {
+    // MioLauncher: 干净退出（code 0）时删除崩溃标记，避免正常退出后下次启动误报崩溃。
+    // 真实崩溃（SIGABRT/SIGSEGV 或非零码）保留标记供启动时检测。
+    if(code == 0) {
+        const char* marker = getenv("MIO_CRASH_MARKER");
+        if(marker != NULL && *marker != '\0') {
+            if(remove(marker) == 0) LOGI("nominal_exit: clean exit, removed crash marker %s", marker);
+            else LOGI("nominal_exit: clean exit, remove marker %s failed: %s", marker, strerror(errno));
+        }
+    }
     // MioLauncher: exitTrap 未设置时（setupExitMethod 未成功/缺 ExitActivity）直接退出，避免二次崩溃挂死
     if(exitTrap_jvm == NULL || exitTrap_exitClass == NULL || exitTrap_staticMethod == NULL) {
         LOGI("nominal_exit: exit trap not set up, exiting directly (%d)", code);
@@ -170,6 +190,8 @@ Java_net_kdt_pojavlaunch_Logger_setLogListener(JNIEnv *env, __attribute((unused)
 JNIEXPORT void JNICALL
 Java_net_kdt_pojavlaunch_utils_JREUtils_setupExitMethod(JNIEnv *env, jclass clazz,
                                                         jobject context) {
+    // MioLauncher: 注册干净退出清理（删除崩溃标记），必须在任何分支前，保证一定生效
+    atexit(clean_exit_delete_marker);
     // MioLauncher: 容错——ExitActivity 可能不在应用里，失败则退出 trap 置空（nominal_exit 已做兜底）
     exitTrap_ctx = (*env)->NewGlobalRef(env,context);
     (*env)->GetJavaVM(env,&exitTrap_jvm);

@@ -73,7 +73,7 @@ private data class CurrentVersion(val id: String?, val loader: ModLoader?)
  * 本地模组列表：可用/全部 筛选 + 图标 + 勾选启停 + 点开详情。
  */
 @Composable
-fun ModListScreen() {
+fun ModListScreen(selectedVersionId: String? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var entries by remember { mutableStateOf<List<ModEntry>>(emptyList()) }
@@ -87,7 +87,8 @@ fun ModListScreen() {
         scope.launch {
             withContext(Dispatchers.IO) {
                 val repo = com.miolauncher.app.data.MioRepository(context)
-                val active = repo.loadInstalledVersions().firstOrNull()
+                val all = repo.loadInstalledVersions()
+                val active = all.firstOrNull { it.id == selectedVersionId } ?: all.firstOrNull()
                 val json = active?.let { File(repo.gameDir, "versions/${it.id}/${it.id}.json") }
                 val loader = json?.let { ModJarReader.detectVersionLoader(it) } ?: ModLoader.NONE
                 currentVersion = CurrentVersion(active?.id, loader)
@@ -97,7 +98,7 @@ fun ModListScreen() {
         }
     }
 
-    LaunchedEffect(Unit) { reload() }
+    LaunchedEffect(selectedVersionId) { reload() }
 
     val shown = entries.filter { if (filterAll) true else it.compatible }
 

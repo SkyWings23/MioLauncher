@@ -255,14 +255,81 @@ object GameLogAnalyzer {
             ),
             severity = Severity.ERROR,
             title = "模组不兼容或缺失",
-            detail = "检测到与模组相关的类/方法错误，可能是模组版本不兼容、缺少前置模组，或模组与当前 Minecraft 版本不匹配。",
+            detail = "检测到与模组相关的类/方法错误，可能是模组版本不兼容、缺少前置模组，或模组与当前 Minecraft 版本不匹配。\n" +
+                "解决办法：移除或降级冲突的模组到与当前版本匹配的版本，即可正常游玩。",
             fix = Fix(
                 description = "检查模组",
                 action = object : FixAction {
                     override fun execute(context: android.content.Context, gameDir: File): Boolean = false
                     override fun describe(): String =
-                        "请到「模组中心」检查：1) 模组是否与当前 Minecraft 版本/加载器匹配；" +
-                        "2) 是否缺少前置模组（如 Fabric API）；3) 尝试移除最近安装的模组后重试。"
+                        "① 确认模组是否与当前 Minecraft 版本/加载器匹配；② 检查是否缺少前置模组（如 Fabric API）；" +
+                        "③ 在「资源 → 模组」页停用或删除最近安装/不匹配的模组，降级到匹配版本后重新启动即可正常游玩。"
+                }
+            ),
+        ),
+        // Fabric 加载器拒绝启动：存在与当前版本/加载器不兼容的模组
+        // 捕获用户可读的「模组 X 需要 Y，但已经安装了 Z」行，给出模组名 + 移除/降级建议。
+        LogPattern(
+            id = "mod_incompatible_launch",
+            regex = Pattern.compile(
+                "((?:模组 '[^']+' \\([^)]+\\)[^\\n]*需要[^\\n]*(?:但|已经安装)[^\\n]*))",
+                Pattern.DOTALL
+            ),
+            severity = Severity.ERROR,
+            title = "模组不兼容导致无法启动",
+            detail = "Fabric/Forge 检测到与当前游戏版本不兼容的模组，拒绝启动。\n" +
+                "解决办法：移除或降级该模组到与当前版本匹配的版本，即可正常游玩。",
+            fix = Fix(
+                description = "移除/降级不兼容模组",
+                action = object : FixAction {
+                    override fun execute(context: android.content.Context, gameDir: File): Boolean = false
+                    override fun describe(): String =
+                        "① 在「资源 → 模组」页停用或删除不兼容的模组（点模组可停用）；" +
+                        "② 或在「下载 → 模组」页安装适配当前版本的模组。\n" +
+                        "完成后重新启动游戏即可正常游玩。"
+                }
+            ),
+        ),
+        // Fabric/Forge 报「模组不兼容」（无详细行时的兜底）
+        LogPattern(
+            id = "mod_incompatible_found",
+            regex = Pattern.compile(
+                "Incompatible mods found!|Mod resolution failed|Some of your mods are incompatible",
+                Pattern.DOTALL
+            ),
+            severity = Severity.ERROR,
+            title = "模组不兼容导致无法启动",
+            detail = "游戏检测到与当前版本不兼容的模组，拒绝启动。\n" +
+                "解决办法：移除或降级不兼容的模组到与当前版本匹配的版本，即可正常游玩。",
+            fix = Fix(
+                description = "移除/降级不兼容模组",
+                action = object : FixAction {
+                    override fun execute(context: android.content.Context, gameDir: File): Boolean = false
+                    override fun describe(): String =
+                        "在「资源 → 模组」页停用/删除不兼容的模组，或在「下载 → 模组」安装适配当前版本的模组，" +
+                        "之后重新启动即可正常游玩。"
+                }
+            ),
+        ),
+        // 模组 mixin 注入失败（多为模组版本与游戏版本不匹配，如为旧版本做的模组）
+        LogPattern(
+            id = "mod_mixin_failed",
+            regex = Pattern.compile(
+                "Mixin apply for mod ([^\\s]+) failed|MixinTransformerError|InvalidInjectionException|Critical injection failure",
+                Pattern.DOTALL
+            ),
+            severity = Severity.ERROR,
+            title = "模组与当前版本不匹配（Mixin 注入失败）",
+            detail = "某个模组尝试修改游戏代码（Mixin）时失败，通常是因为该模组是为其他 Minecraft 版本构建的（版本不匹配）。\n" +
+                "解决办法：移除或降级该模组到与当前版本匹配的版本，即可正常游玩。",
+            fix = Fix(
+                description = "停用/降级不匹配的模组",
+                action = object : FixAction {
+                    override fun execute(context: android.content.Context, gameDir: File): Boolean = false
+                    override fun describe(): String =
+                        "① 在「资源 → 模组」页停用或删除不匹配的模组（尤其是为其他版本下载的）；" +
+                        "② 或在「下载 → 模组」页安装适配当前版本的模组。\n" +
+                        "完成后重新启动游戏即可正常游玩。"
                 }
             ),
         ),
@@ -389,7 +456,7 @@ object GameLogAnalyzer {
         val combined = files.joinToString("\n\n") { f ->
             "=== ${f.name} ===\n" + try { f.readText() } catch (_: Exception) { "" }
         }
-        return analyze(combined)
+        return prioritizeDiagnoses(analyze(combined))
     }
 
     /**
@@ -438,4 +505,46 @@ object GameLogAnalyzer {
         val detail: String,
         val fix: Fix?,
     )
+
+    // ─── 诊断优化：定位根因、过滤噪音、提取建议 ─────────────────
+
+    /** 模组类根因：出现这些诊断时，其他诊断基本都是它的次生表现。 */
+    private val MOD_CAUSE_IDS = setOf(
+        "mod_incompatible", "mod_incompatible_launch", "mod_incompatible_found", "mod_mixin_failed",
+    )
+
+    /** 容易误报的「伴随噪音」：非根因，常由进程收尾 / 库探测失败产生。 */
+    private val NOISE_IDS = setOf(
+        "class_not_found", "native_lib_failed", "native_render_crash", "cacio_warning",
+    )
+
+    /**
+     * 优化诊断列表：
+     * - 若已定位到模组类根因，只保留模组诊断（隐藏误导性的 JVM/渲染噪音）；
+     * - 否则仅剔除伴随噪音，按严重度排序。
+     */
+    fun prioritizeDiagnoses(diagnoses: List<Diagnosis>): List<Diagnosis> {
+        if (diagnoses.isEmpty()) return diagnoses
+        val hasModCause = diagnoses.any { it.id in MOD_CAUSE_IDS }
+        val filtered = if (hasModCause) {
+            diagnoses.filter { it.id in MOD_CAUSE_IDS }
+        } else {
+            diagnoses.filter { it.id !in NOISE_IDS }
+        }
+        return filtered.sortedWith(compareBy({ it.severity.ordinal }, { it.id }))
+    }
+
+    /**
+     * 提取置顶展示的处理建议（去重，最多 3 条）。
+     */
+    fun summarizeSuggestions(diagnoses: List<Diagnosis>): List<String> {
+        return diagnoses
+            .asSequence()
+            .filter { it.fix != null }
+            .mapNotNull { it.fix }
+            .map { it.action.describe() }
+            .distinct()
+            .take(3)
+            .toList()
+    }
 }

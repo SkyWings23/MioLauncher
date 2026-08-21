@@ -18,10 +18,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -70,38 +73,110 @@ private fun GameVersionType.color(): Color = when (this) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ResourceScreen() {
-    var tabIndex by remember { mutableIntStateOf(0) }
+fun ResourceScreen(
+    selectedVersionId: String? = null,
+    onSelectVersion: (String) -> Unit = {},
+    selectedTab: Int = 0,
+    onTabSelected: (Int) -> Unit = {},
+) {
     val tabs = listOf(com.miolauncher.app.ui.theme.I18n.tr("dl.tab_versions"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_mods"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_shaders"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_worlds"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_modpacks"))
 
     Column(Modifier.fillMaxSize()) {
-        Text(
-            text = com.miolauncher.app.ui.theme.I18n.tr("res.title"),
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = com.miolauncher.app.ui.theme.I18n.tr("res.title"),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+            )
+            TargetVersionSwitcher(
+                selectedVersionId = selectedVersionId,
+                onSelectVersion = onSelectVersion,
+            )
+        }
         PrimaryTabRow(
-            selectedTabIndex = tabIndex,
+            selectedTabIndex = selectedTab,
             containerColor = MaterialTheme.colorScheme.background,
             contentColor = MioGreen,
         ) {
             tabs.forEachIndexed { index, title ->
                 Tab(
-                    selected = tabIndex == index,
-                    onClick = { tabIndex = index },
+                    selected = selectedTab == index,
+                    onClick = { onTabSelected(index) },
                     text = {
-                        Text(title, fontWeight = if (tabIndex == index) FontWeight.Bold else FontWeight.Normal)
+                        Text(title, fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal)
                     },
                 )
             }
         }
-        when (tabIndex) {
+        when (selectedTab) {
             0 -> InstalledVersionList()
-            1 -> ModListScreen()
+            1 -> ModListScreen(selectedVersionId = selectedVersionId)
             2 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.SHADER)
             3 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.WORLD)
             4 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.MODPACK)
+        }
+    }
+}
+
+/**
+ * 右上角目标版本切换器：显示当前安装/兼容匹配所用的版本，点击弹出下拉选择。
+ * 选择结果同步到主页「当前游戏版本」，各处保持一致。
+ */
+@Composable
+private fun TargetVersionSwitcher(
+    selectedVersionId: String?,
+    onSelectVersion: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    var versions by remember { mutableStateOf<List<GameVersion>>(emptyList()) }
+    var showMenu by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        versions = withContext(Dispatchers.IO) {
+            runCatching { com.miolauncher.app.data.MioRepository(context).loadInstalledVersions() }
+                .getOrDefault(emptyList())
+        }
+    }
+
+    val current = versions.firstOrNull { it.id == selectedVersionId } ?: versions.firstOrNull()
+
+    Box {
+        Surface(
+            onClick = { showMenu = true },
+            shape = RoundedCornerShape(8.dp),
+            color = MioGreen.copy(alpha = 0.12f),
+            contentColor = MioGreen,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            ) {
+                Icon(Icons.Filled.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = "目标：${current?.id ?: "未安装版本"}",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+            versions.forEach { ver ->
+                DropdownMenuItem(
+                    text = { Text(ver.id, fontWeight = if (ver.id == current?.id) FontWeight.Bold else FontWeight.Normal) },
+                    onClick = {
+                        showMenu = false
+                        onSelectVersion(ver.id)
+                    },
+                    leadingIcon = if (ver.id == current?.id) {
+                        { Icon(Icons.Filled.CheckCircle, null, tint = MioGreen, modifier = Modifier.size(20.dp)) }
+                    } else null,
+                )
+            }
         }
     }
 }
