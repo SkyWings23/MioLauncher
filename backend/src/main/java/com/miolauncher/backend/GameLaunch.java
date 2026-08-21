@@ -1,0 +1,424 @@
+package com.miolauncher.backend;
+
+import android.content.Context;
+
+import org.jackhuang.hmcl.auth.AuthInfo;
+import org.jackhuang.hmcl.game.DefaultGameRepository;
+import org.jackhuang.hmcl.game.GameInstanceID;
+import org.jackhuang.hmcl.game.LaunchOptions;
+import org.jackhuang.hmcl.java.JavaInfo;
+import org.jackhuang.hmcl.java.JavaRuntime;
+import org.jackhuang.hmcl.launch.DefaultLauncher;
+import org.jackhuang.hmcl.launch.ProcessListener;
+import org.jackhuang.hmcl.util.platform.Architecture;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.util.platform.Platform;
+
+import java.io.File;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * 使用 HMCLCore 生成 Minecraft 启动命令行，并在进程内拉起游戏 JVM。
+ */
+public final class GameLaunch {
+
+    private GameLaunch() {}
+
+    /**
+     * 生成游戏启动参数（JVM args + classpath + 主类 + 游戏参数）。
+     *
+     * @param gameDir   游戏目录（.minecraft 同级）
+     * @param versionId 版本 ID
+     * @param username  离线用户名
+     * @return 完整命令行（首元素为 java 路径）
+     */
+    public static List<String> buildCommand(
+            Context context, File gameDir, String versionId, String username) throws Exception {
+        return buildCommand(context, gameDir, versionId, username, 2316, 1080, 2048);
+    }
+
+    /**
+     * 生成游戏启动参数，使用渲染分辨率作为游戏窗口尺寸。
+     */
+    public static List<String> buildCommand(
+            Context context, File gameDir, String versionId, String username,
+            int windowW, int windowH) throws Exception {
+        return buildCommand(context, gameDir, versionId, username, windowW, windowH, 2048);
+    }
+
+    /**
+     * 生成游戏启动参数，可指定最大内存（MB）。
+     */
+    public static List<String> buildCommand(
+            Context context, File gameDir, String versionId, String username,
+            int windowW, int windowH, int maxMemoryMb) throws Exception {
+        return buildCommand(context, gameDir, versionId, username, windowW, windowH, maxMemoryMb, null);
+    }
+
+    /**
+     * 生成游戏启动参数，可指定最大内存与要加入的服务器（host:port）。
+     */
+    public static List<String> buildCommand(
+            Context context, File gameDir, String versionId, String username,
+            int windowW, int windowH, int maxMemoryMb, String serverAddress) throws Exception {
+        File jreHome = JRE.getJreHome(context);
+        if (jreHome == null) {
+            throw new IllegalStateException("JRE 未安装");
+        }
+
+        DefaultGameRepository repository = new DefaultGameRepository(gameDir.toPath());
+        repository.refresh();
+        GameInstanceID id = new GameInstanceID(versionId);
+        org.jackhuang.hmcl.game.GameInstanceManifest manifest =
+                repository.getResolvedInstanceManifest(id).launchManifest();
+        android.util.Log.d("MioGame", "os.name=" + System.getProperty("os.name")
+                + " os.arch=" + System.getProperty("os.arch"));
+        android.util.Log.d("MioGame", "libraries=" + (manifest.libraries() == null ? 0 : manifest.libraries().size())
+                + " classpath=" + repository.getClasspath(manifest));
+        if (manifest.libraries() != null && !manifest.libraries().isEmpty()) {
+            var lib = manifest.libraries().get(0);
+            android.util.Log.d("MioGame", "lib0=" + lib.name() + " applies=" + lib.appliesToCurrentEnvironment()
+                    + " native=" + lib.isNative());
+            try {
+                android.util.Log.d("MioGame", "lib0 file=" + repository.getLibraryFile(manifest, lib));
+            } catch (Throwable t) {
+                android.util.Log.e("MioGame", "lib0 file err", t);
+            }
+        }
+
+        JavaInfo info = new JavaInfo(
+                Platform.getPlatform(OperatingSystem.LINUX, Architecture.ARM64),
+                "21.0.1", null);
+        JavaRuntime java = JavaRuntime.of(
+                Paths.get(jreHome.getAbsolutePath(), "bin", "java"), info, false);
+
+        LaunchOptions.Builder builder = new LaunchOptions.Builder()
+                .setInstanceId(id)
+                .setGameDir(gameDir.toPath())
+                .setJava(java)
+                // Xms 不跟 Xmx 同值：否则开跑即占满整个堆，白白抬高 RSS 引发系统内存压力。
+                // 取 Xmx 一半但不超过 768m：让堆有足够初始空间，减少区块加载时频繁扩容 GC。
+                .setMinMemory(Math.min(768, maxMemoryMb))
+                .setMaxMemory(maxMemoryMb)
+                .setWidth(windowW)
+                .setHeight(windowH)
+                .setNoGeneratedOptimizingJVMArgs(true)
+                .setVersionName(versionId)
+                .setVersionType("release");
+        if (serverAddress != null && !serverAddress.isBlank()) {
+            // 生成 --server <host> --port <port>（或不支持 quick play 时同样回退）
+            builder.setQuickPlayOption(new org.jackhuang.hmcl.game.QuickPlayOption.MultiPlayer(serverAddress));
+            android.util.Log.d("MioGame", "join server: " + serverAddress);
+        }
+        LaunchOptions options = builder.create();
+
+        AuthInfo authInfo = new AuthInfo(
+                username, UUID.randomUUID(), "0", "legacy", "{}");
+
+        DefaultLauncher launcher = new DefaultLauncher(
+                repository, repository.getResolvedInstanceManifest(id).launchManifest(),
+                authInfo, options, (ProcessListener) null);
+
+        return launcher.buildRawCommand();
+    }
+
+    /**
+     * 用给定的启动参数在进程内拉起游戏 JVM。
+     *
+     * @param rawCommand buildCommand 的返回值（首元素为 java 路径）
+     * @return JLI_Launch 返回码
+     */
+    public static int launch(Context context, File gameDir, List<String> rawCommand) throws Exception {
+        return launch(context, gameDir, rawCommand, 2316, 1080, Renderer.NGGL4ES, new LaunchConfig());
+    }
+
+    /**
+     * 用给定的启动参数在进程内拉起游戏 JVM，使用实际 surface 尺寸对齐 glfwstub 窗口。
+     */
+    public static int launch(Context context, File gameDir, List<String> rawCommand,
+                             int windowW, int windowH) throws Exception {
+        return launch(context, gameDir, rawCommand, windowW, windowH, Renderer.NGGL4ES, new LaunchConfig());
+    }
+
+    /**
+     * 用给定的启动参数在进程内拉起游戏 JVM，指定渲染后端。
+     */
+    public static int launch(Context context, File gameDir, List<String> rawCommand,
+                             int windowW, int windowH, Renderer renderer) throws Exception {
+        return launch(context, gameDir, rawCommand, windowW, windowH, renderer, new LaunchConfig());
+    }
+
+    /**
+     * 用给定的启动参数在进程内拉起游戏 JVM，指定渲染后端与启动配置。
+     */
+    public static int launch(Context context, File gameDir, List<String> rawCommand,
+                             int windowW, int windowH, Renderer renderer, LaunchConfig config) throws Exception {
+        File jreHome = JRE.getJreHome(context);
+        if (jreHome == null) {
+            throw new IllegalStateException("JRE 未安装");
+        }
+        JRE.extractRuntime(context);
+        File runtimeDir = JRE.getRuntimeDir(context);
+        File lwjglJar = new File(runtimeDir, "lwjgl.jar");
+        File mioLibPatcher = new File(runtimeDir, "MioLibPatcher.jar");
+        String versionId = findVersionId(rawCommand);
+
+        // cacio 的 Toolkit.loadLibraries 需要 libawt_xawt.so（Pojav stub），
+        // bionic JVM 只从 sun.boot.library.path（jreHome/lib）加载 java.desktop 原生库。
+        // 与 JRE 自带的 libawt.so/libawt_headless.so 放一起，缺失则从 nativeLibraryDir 补齐。
+        File awtXawt = new File(jreHome, "lib/libawt_xawt.so");
+        {
+            File awtSrc = new File(context.getApplicationInfo().nativeLibraryDir, "libawt_xawt.so");
+            if (awtSrc.isFile()) {
+                try (java.io.FileInputStream in = new java.io.FileInputStream(awtSrc);
+                     java.io.FileOutputStream out = new java.io.FileOutputStream(awtXawt)) {
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                }
+                android.util.Log.i("MioGame", "copied libawt_xawt.so to jre lib: " + awtXawt.getAbsolutePath());
+            } else {
+                android.util.Log.w("MioGame", "libawt_xawt.so not found in nativeLibraryDir");
+            }
+        }
+
+        // 启动前预写游戏选项：中文语言 + GUI 缩放自适应 + 低视距 + 低画质（按启动配置）
+        prepareGameOptions(gameDir, windowW, windowH, config);
+
+        // 游戏线程优先级提到最高（FCL 同样把游戏线程设 MAX_PRIORITY），让区块加载优先拿 CPU
+        Thread.currentThread().setPriority(Thread.MAX_PRIORITY);
+        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
+
+        // rawCommand[0] 是 java 可执行文件路径，其余是 JVM + 游戏参数。
+        // 关键：JVM 参数必须插在主类之前，否则会被当作游戏参数忽略。
+        List<String> src = rawCommand.subList(1, rawCommand.size());
+        List<String> extra = new ArrayList<>();
+        // 离线可玩：authlib/Yggdrasil 访问 Mojang 服务器（api.minecraftservices.com 等）在部分网络连不上，
+        // 默认会长时间阻塞导致卡加载界面。这里强制极短超时让请求快速失败，游戏可离线进主菜单。
+        extra.add("-Dsun.net.client.defaultConnectTimeout=3000");
+        extra.add("-Dsun.net.client.defaultReadTimeout=3000");
+        extra.add("-Djava.library.path=" + jreHome.getAbsolutePath() + "/lib"
+                + ":" + context.getApplicationInfo().nativeLibraryDir);
+        extra.add("-Dorg.lwjgl.opengl.libname=" + renderer.getGlLibName());
+        extra.add("-Dorg.lwjgl.freetype.libname=" + context.getApplicationInfo().nativeLibraryDir + "/libfreetype.so");
+        extra.add("-Dorg.lwjgl.spvc.libname=spirv-cross-c-shared");
+        // FCL 全套 AWT/Cacio 配置（Caciocavallo 纯 Java AWT，替 Android 提供 java.awt）
+        File cacioDir = new File(runtimeDir, "caciocavallo17");
+        File cacioAgent = new File(cacioDir, "cacio-agent.jar");
+        extra.add("-Djava.awt.headless=false");
+        extra.add("-Dcacio.managed.screensize=" + windowW + "x" + windowH);
+        extra.add("-Dcacio.font.fontmanager=sun.awt.X11FontManager");
+        extra.add("-Dcacio.font.fontscaler=sun.font.FreetypeFontScaler");
+        extra.add("-Dswing.defaultlaf=javax.swing.plaf.nimbus.NimbusLookAndFeel");
+        extra.add("-Dawt.toolkit=com.github.caciocavallosilano.cacio.ctc.CTCToolkit");
+        extra.add("-Djava.awt.graphicsenv=com.github.caciocavallosilano.cacio.ctc.CTCGraphicsEnvironment");
+        if (cacioAgent.isFile()) {
+            extra.add("-javaagent:" + cacioAgent.getAbsolutePath());
+            extra.add("-Xbootclasspath/a:" + cacioAgent.getAbsolutePath()
+                    + File.pathSeparator + new File(cacioDir, "cacio-shared-1.19.1-SNAPSHOT.jar").getAbsolutePath()
+                    + File.pathSeparator + new File(cacioDir, "cacio-tta-1.19.1-SNAPSHOT.jar").getAbsolutePath());
+        }
+        // cacio 需要的 JVM 内部类访问（对齐 FCL 的 add-exports/add-opens）
+        extra.add("--add-exports=java.desktop/java.awt=ALL-UNNAMED");
+        extra.add("--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED");
+        extra.add("--add-exports=java.desktop/sun.awt.image=ALL-UNNAMED");
+        extra.add("--add-exports=java.desktop/sun.java2d=ALL-UNNAMED");
+        extra.add("--add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED");
+        extra.add("--add-exports=java.desktop/sun.awt=ALL-UNNAMED");
+        extra.add("--add-exports=java.desktop/sun.awt.event=ALL-UNNAMED");
+        extra.add("--add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED");
+        extra.add("--add-exports=java.desktop/sun.font=ALL-UNNAMED");
+        extra.add("--add-exports=java.base/sun.security.action=ALL-UNNAMED");
+        extra.add("--add-opens=java.base/java.util=ALL-UNNAMED");
+        extra.add("--add-opens=java.desktop/java.awt=ALL-UNNAMED");
+        extra.add("--add-opens=java.desktop/sun.font=ALL-UNNAMED");
+        extra.add("--add-opens=java.desktop/sun.java2d=ALL-UNNAMED");
+        extra.add("--add-opens=java.base/java.lang.reflect=ALL-UNNAMED");
+        extra.add("--add-opens=java.base/java.net=ALL-UNNAMED");
+        extra.add("-Dglfwstub.windowWidth=" + windowW);
+        extra.add("-Dglfwstub.windowHeight=" + windowH);
+        extra.add("-Dglfwstub.initEgl=false");
+        extra.add("-Duser.home=" + gameDir.getAbsolutePath());
+        extra.add("-XX:ActiveProcessorCount=" + Runtime.getRuntime().availableProcessors());
+        // ---- 内存/GC 调优：让 JVM 尽早回收、空闲时把堆归还系统，避免 RSS 虚高被 LMK 误杀 ----
+        // 注意：此 adhoc JRE 对部分 G1 微调参数兼容性存疑，先只保留基础项验证
+        extra.add("-XX:MinHeapFreeRatio=10");
+        extra.add("-XX:MaxHeapFreeRatio=40");
+        extra.add("-XX:MaxGCPauseMillis=100");
+        extra.add("-XX:MaxMetaspaceSize=256m");
+        // 并行引用处理：减少 GC 停顿（弱/软引用多的游戏场景尤其有效）
+        extra.add("-XX:+ParallelRefProcEnabled");
+        // ---- 帧率稳定性：充足的 JIT 代码缓存（避免反复重编译导致卡顿）----
+        extra.add("-XX:ReservedCodeCacheSize=256m");
+        // CDS：若 JRE 已带共享归档（lib/server/classes.jsa）则启用——类从只读共享区加载，
+        // 既省内存/加速启动，也绕开 libjimage 并发读取的竞态路径。无归档时 -Xshare:auto 静默回退。
+        File cdsArchive = new File(jreHome, "lib/server/classes.jsa");
+        if (cdsArchive.isFile()) {
+            extra.add("-Xshare:auto");
+            extra.add("-XX:SharedArchiveFile=" + cdsArchive.getAbsolutePath());
+        }
+        extra.add("-Dorg.lwjgl.vulkan.libname=libvulkan.so");
+        extra.add("-Dcpu.name=MT6893");
+        extra.add("-Dminecraft.launcher.brand=MioLauncher");
+        extra.add("-Dminecraft.launcher.version=1.0");
+        // 对齐 FCL：minecraft.client.jar / log4j / sodium / fml
+        File gameJar = new File(gameDir, "versions/" + versionId + "/" + versionId + ".jar");
+        if (gameJar.isFile()) extra.add("-Dminecraft.client.jar=" + gameJar.getAbsolutePath());
+        File log4jXml = new File(gameDir, "versions/" + versionId + "/log4j2.xml");
+        if (log4jXml.isFile()) extra.add("-Dlog4j.configurationFile=" + log4jXml.getAbsolutePath());
+        extra.add("-Dsodium.checks.issue2561=false");
+        extra.add("-Dfml.earlyprogresswindow=false");
+        extra.add("-Dfml.ignoreInvalidMinecraftCertificates=true");
+        extra.add("-Dfml.ignorePatchDiscrepancies=true");
+        extra.add("-Dfile.encoding=UTF-8");
+        extra.add("-Dstdout.encoding=UTF-8");
+        extra.add("-Dstderr.encoding=UTF-8");
+        // 对齐 FCL：java.io.tmpdir（Android 无 /tmp）、os、用户 locale、JNA
+        File cacheDir = new File(context.getCacheDir(), "miojvm");
+        cacheDir.mkdirs();
+        extra.add("-Djava.io.tmpdir=" + cacheDir.getAbsolutePath());
+        extra.add("-Dos.name=Linux");
+        extra.add("-Dos.version=Android-" + android.os.Build.VERSION.RELEASE);
+        extra.add("-Duser.language=zh");
+        extra.add("-Duser.country=CN");
+        extra.add("-Duser.timezone=Asia/Shanghai");
+        extra.add("-Djna.boot.library.path=" + context.getApplicationInfo().nativeLibraryDir);
+        extra.add("-Djna.tmpdir=" + cacheDir.getAbsolutePath());
+        extra.add("-Dorg.lwjgl.system.SharedLibraryExtractPath=" + cacheDir.getAbsolutePath());
+        extra.add("-Dio.netty.native.workdir=" + cacheDir.getAbsolutePath());
+        extra.add("-Dloader.disable_forked_guis=true");
+        extra.add("-Djdk.lang.Process.launchMechanism=FORK");
+        // Android 无 /etc/resolv.conf，为 JVM 提供 DNS 解析（对齐 FCL -Dext.net.resolvPath）
+        File resolv = new File(cacheDir, "resolv.conf");
+        try {
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(resolv);
+            fos.write("nameserver 223.5.5.5\nnameserver 114.114.114.114\n".getBytes());
+            fos.close();
+            extra.add("-Dext.net.resolvPath=" + resolv.getAbsolutePath());
+        } catch (Exception e) {
+            android.util.Log.w("MioGame", "write resolv.conf failed", e);
+        }
+        extra.add("-javaagent:" + mioLibPatcher.getAbsolutePath());
+        // 调试：DumpAgent 在 JVM 内轮询标记文件 dump 全部线程栈
+        File dumpAgent = new File(runtimeDir, "DumpAgent.jar");
+        if (dumpAgent.isFile()) {
+            extra.add("-javaagent:" + dumpAgent.getAbsolutePath());
+        }
+        // 用户附加 JVM 参数
+        if (config.extraJvmArgs != null && !config.extraJvmArgs.trim().isEmpty()) {
+            for (String arg : config.extraJvmArgs.trim().split("\\s+")) {
+                if (!arg.isEmpty()) extra.add(arg);
+            }
+        }
+
+        // 找到主类位置：HMCL raw command 格式为 [...-jvm args..., -cp, <classpath>, <MainClass>, ...game args...]
+        // 主类总是紧跟在 -cp <classpath> 之后，不依赖包名前缀
+        List<String> args = new ArrayList<>();
+        int mainIdx = src.size();
+        for (int i = 0; i < src.size(); i++) {
+            if ("-cp".equals(src.get(i)) && i + 2 < src.size()) {
+                mainIdx = i + 2;
+                break;
+            }
+        }
+        for (int i = 0; i < mainIdx; i++) {
+            String arg = src.get(i);
+            // 过滤 JRE 21 不支持的参数（新版 HMCL 为 Java 24+ 生成，JRE 21 无法识别会直接启动失败）
+            if (arg.startsWith("--sun-misc-unsafe-memory-access")
+                    || arg.startsWith("--enable-native-access")) {
+                android.util.Log.i("MioGame", "filter JRE21-unsupported arg: " + arg);
+                continue;
+            }
+            // 替换 HMCL 生成的无效 -Djava.library.path
+            if (arg.startsWith("-Djava.library.path=")) {
+                args.add(extra.get(0));
+            } else if ("-cp".equals(arg) && i + 1 < src.size()) {
+                // 用 FCL 的 lwjgl.jar 前置 classpath，覆盖游戏自带 LWJGL
+                args.add(arg);
+                args.add(lwjglJar.getAbsolutePath() + java.io.File.pathSeparator + src.get(i + 1));
+                i++;
+            } else {
+                args.add(arg);
+            }
+        }
+        args.addAll(extra);
+        for (int i = mainIdx; i < src.size(); i++) {
+            args.add(src.get(i));
+        }
+
+        return JRE.launch(context, args, gameDir, renderer, config.vsync);
+    }
+
+    /**
+     * 从启动命令行解析版本 ID（HMCL raw command 含 "--version <id>"）。
+     */
+    private static String findVersionId(List<String> rawCommand) {
+        for (int i = 0; i < rawCommand.size() - 1; i++) {
+            if ("--version".equals(rawCommand.get(i))) {
+                return rawCommand.get(i + 1);
+            }
+        }
+        return "1.21.11";
+    }
+
+    /**
+     * 预写游戏 options.txt：语言 / GUI 缩放 / 距离 / 帧率 / FOV / 分辨率 / 粒子（按启动配置）。
+     * 保留已有选项，仅在缺失或不同时调整目标键。
+     */
+    private static void prepareGameOptions(File gameDir, int windowW, int windowH, LaunchConfig cfg) throws Exception {
+        File options = new File(gameDir, "options.txt");
+        List<String> lines = new ArrayList<>();
+        if (options.exists()) {
+            try (java.io.BufferedReader reader =
+                         new java.io.BufferedReader(new java.io.FileReader(options))) {
+                String line;
+                while ((line = reader.readLine()) != null) lines.add(line);
+            }
+        }
+        // 窗口尺寸 windowW/windowH 传入的已是「分辨率缩放」后的实际渲染尺寸
+        //（PREF_SCALE_FACTOR 已在 GameActivity 应用），override 直接用它，避免二次缩放。
+        int rw = windowW;
+        int rh = windowH;
+        int maxFps = cfg.maxFps <= 0 ? 100000 : cfg.maxFps;
+        // 模拟距离不能超过渲染距离：否则超出视野的实体仍被 tick，白耗 CPU 导致掉帧
+        int simDist = Math.min(cfg.simulationDistance, Math.max(2, cfg.renderDistance));
+        String[][] targets = {
+                {"lang:", "lang:" + (cfg.lang == null || cfg.lang.isEmpty() ? "zh_cn" : cfg.lang)},
+                {"guiScale:", "guiScale:" + cfg.guiScale},
+                {"renderDistance:", "renderDistance:" + cfg.renderDistance},
+                {"simulationDistance:", "simulationDistance:" + simDist},
+                {"maxFps:", "maxFps:" + maxFps},
+                {"overrideWidth:", "overrideWidth:" + rw},
+                {"overrideHeight:", "overrideHeight:" + rh},
+                {"fov:", "fov:" + cfg.fov},
+                {"ao:", "ao:false"},
+                {"mipmapLevels:", "mipmapLevels:0"},
+                {"particles:", "particles:" + cfg.particles},
+                {"renderClouds:", "renderClouds:\"false\""},
+                {"entityDistanceScaling:", "entityDistanceScaling:0.5"},
+                {"biomeBlendRadius:", "biomeBlendRadius:0"},
+        };
+        List<String> out = new ArrayList<>();
+        for (String[] t : targets) {
+            boolean found = false;
+            for (String line : lines) {
+                if (line.startsWith(t[0])) {
+                    out.add(t[1]);
+                    found = true;
+                } else {
+                    out.add(line);
+                }
+            }
+            if (!found) out.add(t[1]);
+            lines = out;
+            out = new ArrayList<>();
+        }
+        options.getParentFile().mkdirs();
+        try (java.io.FileWriter writer = new java.io.FileWriter(options)) {
+            for (String line : lines) writer.write(line + "\n");
+        }
+    }
+}

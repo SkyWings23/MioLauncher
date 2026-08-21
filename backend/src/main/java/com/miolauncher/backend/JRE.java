@@ -1,0 +1,436 @@
+package com.miolauncher.backend;
+
+import android.content.Context;
+import android.os.Build;
+import android.system.Os;
+
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.compress.compressors.xz.XZCompressorInputStream;
+
+import java.io.BufferedInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 进程内 JVM 启动器。
+ *
+ * 复用 Amethyst/PojavLauncher 的 jre_launcher.c（native pojavexec），
+ * 在 app 进程内通过 JLI_Launch 拉起 Java 运行时。
+ * JRE 使用 PojavLauncher 的 bionic 构建（APK assets 打包）。
+ */
+public final class JRE {
+
+    public static final String JRE_DIR = "mio/jre";
+
+    private JRE() {}
+
+    /**
+     * 返回 JRE 主目录（filesDir/mio/jre），若不存在则返回 null。
+     */
+    public static File getJreHome(Context context) {
+        File dir = new File(context.getFilesDir(), JRE_DIR);
+        return dir.isDirectory() ? dir : null;
+    }
+
+    public static boolean isInstalled(Context context) {
+        File jre = getJreHome(context);
+        if (jre == null) return false;
+        // 同时校验 libjvm.so 与核心模块镜像 lib/modules（缺 modules 会 JVM 无法启动：
+        // "Failed setting boot class path"）。任一缺失视为未安装，触发重新解压。
+        return new File(jre, "lib/server/libjvm.so").exists()
+                && new File(jre, "lib/modules").exists();
+    }
+
+    /** 运行时资源目录（lwjgl.jar / MioLibPatcher.jar 解压到这里）。 */
+    public static File getRuntimeDir(Context context) {
+        File dir = new File(context.getFilesDir(), "mio/runtime");
+        dir.mkdirs();
+        return dir;
+    }
+
+    /**
+     * 从 APK assets 解压运行时 jar（FCL 的 lwjgl.jar 与 MioLibPatcher.jar）。
+     */
+    public static void extractRuntime(Context context) throws Exception {
+        File dir = getRuntimeDir(context);
+        String[] files = {
+                "runtime/lwjgl.jar", "runtime/MioLibPatcher.jar", "runtime/DumpAgent.jar",
+                "runtime/caciocavallo17/cacio-agent.jar",
+                "runtime/caciocavallo17/cacio-shared-1.19.1-SNAPSHOT.jar",
+                "runtime/caciocavallo17/cacio-tta-1.19.1-SNAPSHOT.jar"};
+        for (String asset : files) {
+            String name = asset.substring(asset.lastIndexOf('/') + 1);
+            File out;
+            if (asset.startsWith("runtime/caciocavallo17/")) {
+                out = new File(new File(dir, "caciocavallo17"), name);
+            } else {
+                out = new File(dir, name);
+            }
+            if (out.isFile() && out.length() > 0) continue;
+            out.getParentFile().mkdirs();
+            try (InputStream in = context.getAssets().open(asset);
+                 java.io.FileOutputStream fos = new java.io.FileOutputStream(out)) {
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) != -1) fos.write(buf, 0, n);
+            }
+        }
+    }
+
+    /**
+     * 当前运行 ABI 对应的 JRE 资产名（assets/components/jre-21/ 下的合并包）。
+     */
+    public static String jreAssetForAbi(Context context) {
+        String abi = Build.SUPPORTED_ABIS != null && Build.SUPPORTED_ABIS.length > 0
+                ? Build.SUPPORTED_ABIS[0] : "arm64-v8a";
+        if (abi.startsWith("armeabi")) return "jre21-armeabi-v7a.tar.xz";
+        if (abi.startsWith("x86_64") || abi.startsWith("x86")) return "jre21-x86_64.tar.xz";
+        return "jre21-arm64-v8a.tar.xz";
+    }
+
+    /**
+     * 从 APK assets 解压 JRE（首次启动调用）。
+     *
+     * @param onProgress 进度回调 (0..1)
+     */
+    public static void install(Context context, java.util.function.DoubleConsumer onProgress) throws Exception {
+        File jreHome = new File(context.getFilesDir(), JRE_DIR);
+        if (isInstalled(context)) return;
+
+        File tmp = new File(context.getFilesDir(), JRE_DIR + ".tmp");
+        deleteRecursively(tmp);
+        tmp.mkdirs();
+
+        String asset = "components/jre-21/" + jreAssetForAbi(context);
+        InputStream in = context.getAssets().open(asset);
+        XZCompressorInputStream xz = new XZCompressorInputStream(new BufferedInputStream(in));
+        TarArchiveInputStream tar = new TarArchiveInputStream(xz);
+        TarArchiveEntry entry;
+        long total = context.getAssets().open(asset).available();
+        long done = 0;
+        while ((entry = tar.getNextEntry()) != null) {
+            File out = new File(tmp, entry.getName());
+            if (entry.isDirectory()) {
+                out.mkdirs();
+            } else {
+                out.getParentFile().mkdirs();
+                FileOutputStream fos = new FileOutputStream(out);
+                byte[] buf = new byte[65536];
+                int n;
+                long fileTotal = entry.getSize();
+                long fileDone = 0;
+                while ((n = tar.read(buf)) != -1) {
+                    fos.write(buf, 0, n);
+                    fileDone += n;
+                    if (onProgress != null && fileTotal > 0) {
+                        onProgress.accept((done + fileDone / (double) Math.max(fileTotal, 1)) / total);
+                    }
+                }
+                fos.close();
+            }
+            done += entry.getSize();
+        }
+        tar.close();
+
+        // 设置执行权限（assets 解压后默认无 exec 位）
+        setExecutable(tmp);
+
+        File old = new File(context.getFilesDir(), JRE_DIR + ".old");
+        deleteRecursively(old);
+        if (jreHome.exists()) {
+            if (!jreHome.renameTo(old)) {
+                deleteRecursively(jreHome);
+            }
+        }
+        if (!tmp.renameTo(jreHome)) {
+            deleteRecursively(jreHome);
+            if (!tmp.renameTo(jreHome)) {
+                throw new IllegalStateException("JRE 解压失败：无法移动临时目录");
+            }
+        }
+        deleteRecursively(old);
+    }
+
+    private static void setExecutable(File dir) {
+        File[] files = dir.listFiles();
+        if (files == null) return;
+        for (File f : files) {
+            if (f.isDirectory()) {
+                setExecutable(f);
+            } else if (f.getName().endsWith(".so") || f.getName().equals("java")) {
+                f.setExecutable(true, false);
+            }
+        }
+    }
+
+    private static void deleteRecursively(File f) {
+        if (f == null || !f.exists()) return;
+        File[] children = f.listFiles();
+        if (children != null) {
+            for (File c : children) deleteRecursively(c);
+        }
+        f.delete();
+    }
+
+    /**
+     * 启动进程内 JVM。
+     *
+     * @param args JVM 参数，如 {"-version"}
+     * @return JLI_Launch 返回码（0 表示成功）
+     */
+    public static int launch(Context context, List<String> args) throws Exception {
+        return launch(context, args, null);
+    }
+
+    public static int launch(Context context, List<String> args, File workDir) throws Exception {
+        return launch(context, args, workDir, Renderer.NGGL4ES, false);
+    }
+
+    public static int launch(Context context, List<String> args, File workDir, Renderer renderer) throws Exception {
+        return launch(context, args, workDir, renderer, false);
+    }
+
+    public static int launch(Context context, List<String> args, File workDir, Renderer renderer, boolean vsync) throws Exception {
+        File jreHome = getJreHome(context);
+        if (jreHome == null) {
+            throw new IllegalStateException("JRE 未安装，请先下载 Java 运行时");
+        }
+        setEnvironment(jreHome, context.getApplicationInfo().nativeLibraryDir, renderer, vsync);
+
+        System.loadLibrary("pojavexec");
+        net.kdt.pojavlaunch.utils.JREUtils.setDalvikJavaVM();
+        net.kdt.pojavlaunch.utils.JREUtils.setLdLibraryPath(ldLibraryPath(jreHome));
+
+        // 切换到游戏工作目录（native 库已加载）
+        if (workDir != null) {
+            net.kdt.pojavlaunch.utils.JREUtils.chdir(workDir.getAbsolutePath());
+        }
+        // 验证 LWJGL 库能否从 app nativeLibraryDir 加载
+        try {
+            android.util.Log.d("MioJRE", "nativeDir=" + context.getApplicationInfo().nativeLibraryDir);
+            android.util.Log.d("MioJRE", "lwjglAbs=" + net.kdt.pojavlaunch.utils.JREUtils.dlopen(
+                    context.getApplicationInfo().nativeLibraryDir + "/liblwjgl.so"));
+            android.util.Log.d("MioJRE", "lwjglByName=" + net.kdt.pojavlaunch.utils.JREUtils.dlopen("liblwjgl.so"));
+        } catch (Throwable t) {
+            android.util.Log.e("MioJRE", "lwjgl dlopen test failed", t);
+        }
+
+        // 通知 JVM 与 ART 共存（PojavLauncher 标准做法）
+        long artVm = net.kdt.pojavlaunch.Tools.getJavaVMPointer();
+        Os.setenv("DALVIK_JAVAVM", Long.toHexString(artVm), true);
+        Os.setenv("DALVIK_APPLICATION", context.getPackageName(), true);
+
+        // 预加载 JVM 运行所需的核心库，使后续 dlopen("libjli.so") 能找到。
+        String jre = jreHome.getAbsolutePath();
+        preload(jre + "/lib/libjli.so");
+        preload(jre + "/lib/server/libjvm.so");
+        // 按依赖顺序预加载核心 JVM 库（libnet 依赖 libjava 等）
+        String[] coreLibs = {
+            "libjava.so", "libnet.so", "libnio.so", "libzip.so",
+            "libjimage.so", "libverify.so", "libextnet.so",
+            "libsunec.so", "libjsig.so", "libinstrument.so", "libj2pkcs11.so",
+            "libj2gss.so", "libprefs.so", "librmi.so", "libsctp.so",
+            "libdt_socket.so", "libjdwp.so", "libsyslookup.so",
+        };
+        for (String lib : coreLibs) {
+            preload(jre + "/lib/" + lib);
+        }
+        // 预加载其余所有共享库（失败的如 AWT 类可忽略）
+        File libDir = new File(jreHome, "lib");
+        File[] libs = libDir.listFiles((dir, name) -> name.endsWith(".so"));
+        if (libs != null) {
+            for (File lib : libs) {
+                preload(lib.getAbsolutePath());
+            }
+        }
+
+        // 捕获 JVM stdout/stderr 到日志文件（进程内 JVM 输出默认不进 logcat）
+        try {
+            File logDir = new File(context.getFilesDir(), "mio/logs");
+            logDir.mkdirs();
+            File logFile = new File(logDir, "game.log");
+            net.kdt.pojavlaunch.utils.JREUtils.redirectStdout(logFile.getAbsolutePath());
+        } catch (Throwable t) {
+            System.out.println("MioJRE: redirect failed: " + t);
+        }
+
+        // MioLauncher: 设置 exit trap（nominal_exit 依赖 exitTrap_jvm，缺失时 SIGABRT 二次 SIGSEGV 挂死）
+        try {
+            net.kdt.pojavlaunch.utils.JREUtils.setupExitMethod(context);
+        } catch (Throwable t) {
+            System.out.println("MioJRE: setupExitMethod failed: " + t);
+        }
+
+        List<String> fullArgs = new ArrayList<>();
+        // argv[0] 需满足 dirname(argv[0]) 与 LD_LIBRARY_PATH 首段一致，
+        // 否则 launcher 会尝试 re-exec（Android 上被 SELinux 拒绝）。
+        fullArgs.add(jre + "/lib/java");
+        fullArgs.add("-Djava.home=" + jre);
+        fullArgs.addAll(args);
+
+        System.out.println("MioJRE: launching JVM with args " + fullArgs);
+        return com.oracle.dalvik.VMLauncher.launchJVM(fullArgs.toArray(new String[0]));
+    }
+
+    /**
+     * 服务器专用轻量启动：跳过游戏专用的 GL / lwjgl / cacio 初始化。
+     * 供独立 :server 进程内运行 Minecraft 服务器（JLI_Launch，无 SELinux exec 限制）。
+     */
+    public static int launchServer(Context context, List<String> args, File workDir) throws Exception {
+        File jreHome = getJreHome(context);
+        if (jreHome == null) {
+            throw new IllegalStateException("JRE 未安装");
+        }
+        String nativeDir = context.getApplicationInfo().nativeLibraryDir;
+
+        // 最小环境：JAVA_HOME / LD_LIBRARY_PATH / PATH / DALVIK
+        Os.setenv("JAVA_HOME", jreHome.getAbsolutePath(), true);
+        String libDir = jreHome.getAbsolutePath() + "/lib";
+        String ld = jreHome.getAbsolutePath() + "/lib/server" + ":" + libDir
+                + ":" + jreHome.getAbsolutePath() + "/lib/jli" + ":" + nativeDir;
+        String oldLd = System.getenv("LD_LIBRARY_PATH");
+        if (oldLd != null && !oldLd.isEmpty()) ld = ld + ":" + oldLd;
+        Os.setenv("LD_LIBRARY_PATH", ld, true);
+        Os.setenv("PATH", jreHome.getAbsolutePath() + "/bin", true);
+
+        System.loadLibrary("pojavexec");
+        net.kdt.pojavlaunch.utils.JREUtils.setDalvikJavaVM();
+        if (workDir != null) {
+            net.kdt.pojavlaunch.utils.JREUtils.chdir(workDir.getAbsolutePath());
+        }
+        long artVm = net.kdt.pojavlaunch.Tools.getJavaVMPointer();
+        Os.setenv("DALVIK_JAVAVM", Long.toHexString(artVm), true);
+        Os.setenv("DALVIK_APPLICATION", context.getPackageName(), true);
+
+        // 预加载 JVM 核心库
+        String jre = jreHome.getAbsolutePath();
+        preload(jre + "/lib/libjli.so");
+        preload(jre + "/lib/server/libjvm.so");
+        String[] coreLibs = {
+            "libjava.so", "libnet.so", "libnio.so", "libzip.so",
+            "libjimage.so", "libverify.so", "libextnet.so",
+            "libsunec.so", "libjsig.so", "libinstrument.so", "libj2pkcs11.so",
+            "libj2gss.so", "libprefs.so", "librmi.so", "libsctp.so",
+            "libdt_socket.so", "libjdwp.so", "libsyslookup.so",
+        };
+        for (String lib : coreLibs) {
+            preload(jre + "/lib/" + lib);
+        }
+        File libDirFile = new File(jreHome, "lib");
+        File[] libs = libDirFile.listFiles((dir, name) -> name.endsWith(".so"));
+        if (libs != null) {
+            for (File f : libs) preload(f.getAbsolutePath());
+        }
+
+        // 服务器 stdout → 服务器日志（MC 自身也写 logs/latest.log）
+        try {
+            File serverDir = workDir == null ? new File(jre, "server") : workDir;
+            File logDir = new File(serverDir, "logs");
+            logDir.mkdirs();
+            net.kdt.pojavlaunch.utils.JREUtils.redirectStdout(new File(logDir, "jvm.out.log").getAbsolutePath());
+        } catch (Throwable t) {
+            System.out.println("MioJRE: server redirect failed: " + t);
+        }
+
+        List<String> fullArgs = new ArrayList<>();
+        fullArgs.add(jre + "/lib/java");
+        fullArgs.add("-Djava.home=" + jre);
+        fullArgs.addAll(args);
+        System.out.println("MioJRE: launching server JVM");
+        return com.oracle.dalvik.VMLauncher.launchJVM(fullArgs.toArray(new String[0]));
+    }
+
+    private static void preload(String path) {
+        boolean ok = net.kdt.pojavlaunch.utils.JREUtils.dlopen(path);
+        System.out.println("MioJRE: preload " + path + " -> " + ok);
+    }
+
+    private static String ldLibraryPath(File jreHome) {
+        String jre = jreHome.getAbsolutePath();
+        String base = jre + "/lib" + ":" + jre + "/lib/jli" + ":" + jre + "/lib/server";
+        String old = System.getenv("LD_LIBRARY_PATH");
+        return (old == null || old.isEmpty()) ? base : base + ":" + old;
+    }
+
+    /**
+     * 设置 JVM 运行所需的环境变量：JAVA_HOME / LD_LIBRARY_PATH / PATH / 渲染后端。
+     */
+    private static void setEnvironment(File jreHome, String nativeDir, Renderer renderer, boolean vsync) throws Exception {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            throw new IllegalStateException("需要 Android 8.0+");
+        }
+        String jre = jreHome.getAbsolutePath();
+        String libDir = jre + "/lib";
+        String jliDir = jre + "/lib/jli";
+        String serverDir = jre + "/lib/server";
+        String jvmPath = serverDir + "/libjvm.so";
+
+        Os.setenv("JAVA_HOME", jre, true);
+        // POJAV_ENVIRON 不设置，让 env_init 构造函数自动创建 pojav_environ
+        // （若设为空串，strtoul("") 会得到 NULL，导致第二次加载崩溃）。
+
+        // 渲染后端：按所选 Renderer 配置 EGL / OpenGL ES 环境。
+        Os.setenv("AMETHYST_RENDERER", renderer.getAmethystRenderer(), true);
+        Os.setenv("POJAV_RENDERER", renderer.getGlEsVersion() >= 3 ? "opengles3" : "opengles2", true);
+        Os.setenv("POJAVEXEC_EGL", renderer.getEglLibName(), true);
+        Os.setenv("FORCE_VSYNC", vsync ? "true" : "false", true);
+
+        if (renderer.isGl4es()) {
+            // gl4es 家族（NGGL4ES / GL4ES）：GL → GLES 翻译
+            Os.setenv("LIBGL_ES", Integer.toString(renderer.getGlEsVersion()), true);
+            Os.setenv("LIBGL_GL", renderer.getGlVersionCode(), true);
+            Os.setenv("LIBGL_NORMALIZE", "1", true);
+            Os.setenv("LIBGL_NOINTOVLHACK", "1", true);
+            Os.setenv("LIBGL_NOERROR", "1", true);
+            // 禁用 gl4es 的"全屏 Blit 到默认 FBO 时触发 SwapBuffers" hack：
+            // 该 hack 每帧触发额外 swap（双倍产出缓冲），既造成菜单背景闪烁，
+            // 也会填满 EGL 缓冲队列导致 eglSwapBuffers 阻塞（渲染线程卡死）。
+            Os.setenv("LIBGL_FEATURES", "-BLITFULLSCREEN", true);
+            Os.setenv("LIBGL_USE_MC_COLOR", "1", true);
+        } else {
+            // ANGLE / OSMesa：不经 gl4es，无需 LIBGL_* 系列
+            Os.unsetenv("LIBGL_ES");
+            Os.unsetenv("LIBGL_GL");
+            Os.unsetenv("LIBGL_NORMALIZE");
+            Os.unsetenv("LIBGL_NOINTOVLHACK");
+            Os.unsetenv("LIBGL_NOERROR");
+            Os.unsetenv("LIBGL_FEATURES");
+            Os.unsetenv("LIBGL_USE_MC_COLOR");
+        }
+
+        // 通用 env：native 库目录 + spirv-cross（着色器编译）+ TMPDIR
+        Os.setenv("POJAV_NATIVEDIR", nativeDir, true);
+        Os.setenv("DRIVER_PATH", nativeDir, true);
+        Os.setenv("DLOPEN", "libspirv-cross-c-shared.so", true);
+        Os.setenv("TMPDIR", System.getProperty("java.io.tmpdir"), true);
+        // FCL 用 cacio.managed.screensize + glfwstub 窗口尺寸，不再设 AWTSTUB
+        // 对齐 FCL：mod 运行时目录（占位，与 FCL app_runtime_mod 对应）
+        File modDir = new File(jreHome.getParentFile(), "runtime_mod");
+        modDir.mkdirs();
+        Os.setenv("MOD_ANDROID_RUNTIME", modDir.getAbsolutePath(), true);
+
+        // launcher 的 SetEnvironmentVariables 要求 LD_LIBRARY_PATH 以 jvmpath 开头，
+        // 否则会尝试 re-exec（Android 上被 SELinux 拒绝）。故把 jvmpath 放最前。
+        String ld = jvmPath + ":" + libDir + ":" + jliDir + ":" + serverDir;
+        // 对齐 FCL：把 /vendor/lib64/hw（Mali GLES 驱动目录）等系统目录放入搜索路径，
+        // 使 gl4es/EGL 能 dlopen 到真实驱动、dlsym(RTLD_DEFAULT) 能解析 glBufferStorage。
+        ld = ld + ":/system/lib64:/vendor/lib64:/vendor/lib64/hw:/system_ext/lib64:" + nativeDir;
+        String oldLd = System.getenv("LD_LIBRARY_PATH");
+        if (oldLd != null && !oldLd.isEmpty()) {
+            ld = ld + ":" + oldLd;
+        }
+        Os.setenv("LD_LIBRARY_PATH", ld, true);
+
+        String path = jre + "/bin";
+        String oldPath = System.getenv("PATH");
+        if (oldPath != null && !oldPath.isEmpty()) {
+            path = path + ":" + oldPath;
+        }
+        Os.setenv("PATH", path, true);
+    }
+}

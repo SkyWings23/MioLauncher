@@ -1,0 +1,550 @@
+package com.miolauncher.app.ui.screens
+
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.miolauncher.app.data.GameVersion
+import com.miolauncher.app.data.GameVersionType
+import com.miolauncher.app.data.GameLauncher
+import com.miolauncher.app.data.MioRepository
+import com.miolauncher.app.ui.components.MioFeatureCard
+import com.miolauncher.app.ui.components.OfflineLoginDialog
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+private val MioGreen = Color(0xFF4CAF50)
+
+@Composable
+fun HomeScreen(
+    onLaunch: (GameVersion) -> Unit = {},
+    onNavigateToTab: (Int) -> Unit = {},
+    onOpenDownloadTab: (Int) -> Unit = {},
+    onOpenLaunchSettings: () -> Unit = {},
+) {
+    val context = LocalContext.current
+    var installedVersions by remember { mutableStateOf<List<GameVersion>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var selectedIdx by remember { mutableIntStateOf(0) }
+    var showSwitcher by remember { mutableStateOf(false) }
+    var showOfflineDialog by remember { mutableStateOf(false) }
+    var showVersionSettingsDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            try {
+                val repo = MioRepository(context)
+                installedVersions = repo.loadInstalledVersions()
+            } catch (_: Exception) {}
+        }
+        loading = false
+    }
+
+    val selectedVersion = installedVersions.getOrNull(selectedIdx)
+
+    fun play(version: GameVersion) {
+        val has = GameLauncher.hasAccount(context)
+        android.util.Log.d("MioHome", "play ${version.id} hasAccount=$has")
+        if (has) {
+            onLaunch(version)
+        } else {
+            showOfflineDialog = true
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp),
+    ) {
+        Spacer(Modifier.height(8.dp))
+        WelcomeBanner()
+        Spacer(Modifier.height(16.dp))
+
+        VersionCard(
+            version = selectedVersion,
+            allVersions = installedVersions,
+            showSwitcher = showSwitcher,
+            onSwitcherToggle = { showSwitcher = !showSwitcher },
+            onVersionSelected = { idx ->
+                selectedIdx = idx
+                showSwitcher = false
+            },
+            onPlayClick = { selectedVersion?.let(::play) },
+            onSettingsClick = { showVersionSettingsDialog = true },
+        )
+        Spacer(Modifier.height(20.dp))
+
+        if (installedVersions.size > 1) {
+            Text(
+                text = com.miolauncher.app.ui.theme.I18n.tr("home.installed_versions"),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(12.dp))
+            installedVersions.forEachIndexed { idx, ver ->
+                InstalledVersionRow(
+                    version = ver,
+                    isCurrent = idx == selectedIdx,
+                    onPlayClick = { play(ver) },
+                    onSelect = { selectedIdx = idx },
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        Text(
+            text = com.miolauncher.app.ui.theme.I18n.tr("home.quick_features"),
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(12.dp))
+        FeatureGrid(
+            onNavigateToTab = onNavigateToTab,
+            onOpenDownloadTab = onOpenDownloadTab,
+            onOpenLaunchSettings = onOpenLaunchSettings,
+            context = context,
+        )
+        Spacer(Modifier.height(24.dp))
+    }
+
+    if (showOfflineDialog) {
+        val version = selectedVersion
+        OfflineLoginDialog(
+            initialUsername = "",
+            onConfirm = { name ->
+                GameLauncher.saveOfflineUsername(context, name)
+                showOfflineDialog = false
+                if (version != null) onLaunch(version)
+            },
+            onDismiss = { showOfflineDialog = false },
+        )
+    }
+
+    // 版本设置对话框（组件隔离开关）
+    if (showVersionSettingsDialog) {
+        val version = selectedVersion
+        if (version != null) {
+            var cfg by remember { mutableStateOf(
+                com.miolauncher.app.data.VersionConfigStore.load(context, version.id)
+            ) }
+            AlertDialog(
+                onDismissRequest = { showVersionSettingsDialog = false },
+                title = { Text("版本设置 — ${version.id}") },
+                text = {
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("组件隔离", fontWeight = FontWeight.Bold)
+                                Text(
+                                    "启用后 mods/config/saves 独立存储，不影响其他版本",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = cfg.isolated,
+                                onCheckedChange = {
+                                    cfg = cfg.copy(isolated = it)
+                                    com.miolauncher.app.data.VersionConfigStore.save(context, version.id, cfg)
+                                },
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "隔离状态：${if (cfg.isolated) "已启用 — 实例目录独立" else "未启用 — 共享全局目录"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (cfg.isolated) MioGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showVersionSettingsDialog = false }) {
+                        Text("确定")
+                    }
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun WelcomeBanner() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(140.dp)
+            .background(
+                brush = Brush.horizontalGradient(
+                    listOf(Color(0xFF1B5E20), Color(0xFF2E7D32), Color(0xFF66BB6A)),
+                ),
+                shape = RoundedCornerShape(20.dp),
+            ),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Text(
+                text = "MioLauncher",
+                style = MaterialTheme.typography.headlineSmall,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = com.miolauncher.app.ui.theme.I18n.tr("home.tagline"),
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.85f),
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "JAVA EDITION",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.6f),
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .background(Color.Black.copy(alpha = 0.25f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+        }
+    }
+}
+
+private fun GameVersionType.label(): String = when (this) {
+    GameVersionType.RELEASE -> "正式版"
+    GameVersionType.SNAPSHOT -> "快照版"
+    GameVersionType.BETA -> "测试版"
+    GameVersionType.ALPHA -> "远古版"
+}
+
+private fun GameVersionType.color(): Color = when (this) {
+    GameVersionType.RELEASE -> Color(0xFF4CAF50)
+    GameVersionType.SNAPSHOT -> Color(0xFF2196F3)
+    GameVersionType.BETA -> Color(0xFFFF9800)
+    GameVersionType.ALPHA -> Color(0xFFE91E63)
+}
+
+@Composable
+private fun VersionCard(
+    version: GameVersion?,
+    allVersions: List<GameVersion>,
+    showSwitcher: Boolean,
+    onSwitcherToggle: () -> Unit,
+    onVersionSelected: (Int) -> Unit,
+    onPlayClick: () -> Unit,
+    onSettingsClick: () -> Unit = {},
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = com.miolauncher.app.ui.theme.I18n.tr("home.current_version"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = version?.id ?: com.miolauncher.app.ui.theme.I18n.tr("home.no_version"),
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        if (allVersions.size > 1) {
+                            IconButton(onClick = onSwitcherToggle, modifier = Modifier.size(32.dp)) {
+                                Icon(
+                                    Icons.Filled.ArrowDropDown,
+                                    contentDescription = "切换版本",
+                                    tint = MioGreen,
+                                    modifier = Modifier.size(28.dp),
+                                )
+                            }
+                        }
+                    }
+                    version?.let {
+                        Spacer(Modifier.height(2.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(it.type.color(), CircleShape),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "${it.type.label()}${if (it.releaseTime.isNotEmpty()) " · ${it.releaseTime}" else ""}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                if (version != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Button(
+                            onClick = onPlayClick,
+                            colors = ButtonDefaults.buttonColors(containerColor = MioGreen),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                horizontal = 20.dp, vertical = 12.dp,
+                            ),
+                        ) {
+                            Icon(
+                                Icons.Filled.PlayArrow,
+                                contentDescription = null,
+                                modifier = Modifier.size(22.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(com.miolauncher.app.ui.theme.I18n.tr("home.start_game"), fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        IconButton(
+                            onClick = { onSettingsClick() },
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp))
+                                .size(44.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.Settings,
+                                contentDescription = "版本设置",
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
+                }
+            }
+
+            DropdownMenu(
+                expanded = showSwitcher,
+                onDismissRequest = onSwitcherToggle,
+            ) {
+                allVersions.forEachIndexed { idx, ver ->
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(ver.type.color(), CircleShape),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Column {
+                                    Text(ver.id, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        ver.type.label(),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        },
+                        onClick = { onVersionSelected(idx) },
+                        leadingIcon = if (idx == allVersions.indexOf(version)) {
+                            { Icon(Icons.Filled.CheckCircle, null, tint = MioGreen, modifier = Modifier.size(20.dp)) }
+                        } else null,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InstalledVersionRow(
+    version: GameVersion,
+    isCurrent: Boolean,
+    onPlayClick: () -> Unit,
+    onSelect: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isCurrent) MioGreen.copy(alpha = 0.08f)
+            else MaterialTheme.colorScheme.surface,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.CheckCircle,
+                contentDescription = null,
+                tint = if (isCurrent) MioGreen else Color.Gray,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = version.id,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .background(version.type.color(), CircleShape),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = version.type.label(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (version.releaseTime.isNotEmpty()) {
+                        Text(
+                            text = " · ${version.releaseTime}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            Button(
+                onClick = onPlayClick,
+                colors = ButtonDefaults.buttonColors(containerColor = MioGreen),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    horizontal = 14.dp, vertical = 8.dp,
+                ),
+            ) {
+                Icon(
+                    Icons.Filled.PlayArrow,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(com.miolauncher.app.ui.theme.I18n.tr("home.launch"), fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun FeatureGrid(
+    onNavigateToTab: (Int) -> Unit,
+    onOpenDownloadTab: (Int) -> Unit,
+    onOpenLaunchSettings: () -> Unit,
+    context: Context,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            MioFeatureCard(
+                title = com.miolauncher.app.ui.theme.I18n.tr("home.version_mgmt"),
+                subtitle = com.miolauncher.app.ui.theme.I18n.tr("home.version_mgmt_sub"),
+                onClick = { onOpenDownloadTab(0) },
+                modifier = Modifier.weight(1f),
+            )
+            MioFeatureCard(
+                title = com.miolauncher.app.ui.theme.I18n.tr("home.mods_center"),
+                subtitle = com.miolauncher.app.ui.theme.I18n.tr("home.mods_center_sub"),
+                onClick = { onOpenDownloadTab(1) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            MioFeatureCard(
+                title = com.miolauncher.app.ui.theme.I18n.tr("home.shaders"),
+                subtitle = com.miolauncher.app.ui.theme.I18n.tr("home.shaders_sub"),
+                onClick = { onOpenDownloadTab(2) },
+                modifier = Modifier.weight(1f),
+            )
+            MioFeatureCard(
+                title = com.miolauncher.app.ui.theme.I18n.tr("home.modpacks"),
+                subtitle = com.miolauncher.app.ui.theme.I18n.tr("home.modpacks_sub"),
+                onClick = { onOpenDownloadTab(4) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            MioFeatureCard(
+                title = com.miolauncher.app.ui.theme.I18n.tr("home.worlds"),
+                subtitle = com.miolauncher.app.ui.theme.I18n.tr("home.worlds_sub"),
+                onClick = { onOpenDownloadTab(3) },
+                modifier = Modifier.weight(1f),
+            )
+            MioFeatureCard(
+                title = com.miolauncher.app.ui.theme.I18n.tr("home.resources"),
+                subtitle = com.miolauncher.app.ui.theme.I18n.tr("home.resources_sub"),
+                onClick = { onNavigateToTab(2) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            MioFeatureCard(
+                title = "启动设置",
+                subtitle = "渲染器 / 内存 / 性能",
+                onClick = onOpenLaunchSettings,
+                modifier = Modifier.weight(1f),
+            )
+            MioFeatureCard(
+                title = "Java 运行时",
+                subtitle = "版本 / 设备信息",
+                onClick = { onNavigateToTab(3) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}

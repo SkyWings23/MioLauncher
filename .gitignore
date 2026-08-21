@@ -1,0 +1,29 @@
+# ---- Gradle / 构建产物 ----
+.gradle/
+build/
+*/build/
+.kotlin/
+*.apk
+*.aab
+*.tar.xz
+*.tar.gz
+*.gz
+
+# ---- IDE ----
+.idea/
+*.iml
+.vscode/
+*.hprof
+
+# ---- 本地配置 / 敏感文件 ----
+local.properties
+*.keystore
+*.jks
+*.jks.enc
+*.jks.bak
+.env
+.env.local
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db
