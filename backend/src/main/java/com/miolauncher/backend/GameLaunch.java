@@ -64,16 +64,26 @@ public final class GameLaunch {
     public static List<String> buildCommand(
             Context context, File gameDir, String versionId, String username,
             int windowW, int windowH, int maxMemoryMb, String serverAddress) throws Exception {
-        File jreHome = JRE.getJreHome(context);
-        if (jreHome == null) {
-            throw new IllegalStateException("JRE 未安装");
-        }
-
         DefaultGameRepository repository = new DefaultGameRepository(gameDir.toPath());
         repository.refresh();
         GameInstanceID id = new GameInstanceID(versionId);
         org.jackhuang.hmcl.game.GameInstanceManifest manifest =
                 repository.getResolvedInstanceManifest(id).launchManifest();
+
+        // 按版本所需 Java 主版本选择对应 JRE（如 26.x 需要 Java 25 → 用内置 jre25）
+        int javaMajor = 21;
+        if (manifest.javaVersion() != null) {
+            int need = manifest.javaVersion().majorVersion();
+            if (need > 21) javaMajor = need;
+        }
+        // 确保对应 JRE 已安装（assets 内置，解压即可）
+        JRE.ensureInstalled(context, javaMajor);
+        File jreHome = JRE.getJreHome(context, javaMajor);
+        if (jreHome == null) {
+            throw new IllegalStateException("JRE " + javaMajor + " 未安装");
+        }
+
+        android.util.Log.d("MioGame", "javaMajor=" + javaMajor + " jreHome=" + jreHome.getAbsolutePath());
         android.util.Log.d("MioGame", "os.name=" + System.getProperty("os.name")
                 + " os.arch=" + System.getProperty("os.arch"));
         android.util.Log.d("MioGame", "libraries=" + (manifest.libraries() == null ? 0 : manifest.libraries().size())
@@ -91,7 +101,7 @@ public final class GameLaunch {
 
         JavaInfo info = new JavaInfo(
                 Platform.getPlatform(OperatingSystem.LINUX, Architecture.ARM64),
-                "21.0.1", null);
+                javaMajor + ".0", null);
         JavaRuntime java = JavaRuntime.of(
                 Paths.get(jreHome.getAbsolutePath(), "bin", "java"), info, false);
 
@@ -155,16 +165,29 @@ public final class GameLaunch {
      * 用给定的启动参数在进程内拉起游戏 JVM，指定渲染后端与启动配置。
      */
     public static int launch(Context context, File gameDir, List<String> rawCommand,
-                             int windowW, int windowH, Renderer renderer, LaunchConfig config) throws Exception {
-        File jreHome = JRE.getJreHome(context);
+                              int windowW, int windowH, Renderer renderer, LaunchConfig config) throws Exception {
+        String versionId = findVersionId(rawCommand);
+        // 按版本所需 Java 主版本选择对应 JRE
+        int javaMajor = 21;
+        try {
+            DefaultGameRepository repo = new DefaultGameRepository(gameDir.toPath());
+            repo.refresh();
+            org.jackhuang.hmcl.game.GameInstanceManifest m =
+                    repo.getResolvedInstanceManifest(new GameInstanceID(versionId)).launchManifest();
+            if (m.javaVersion() != null && m.javaVersion().majorVersion() > 21) {
+                javaMajor = m.javaVersion().majorVersion();
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("MioGame", "resolve javaMajor failed, use 21", t);
+        }
+        File jreHome = JRE.getJreHome(context, javaMajor);
         if (jreHome == null) {
-            throw new IllegalStateException("JRE 未安装");
+            throw new IllegalStateException("JRE " + javaMajor + " 未安装");
         }
         JRE.extractRuntime(context);
         File runtimeDir = JRE.getRuntimeDir(context);
         File lwjglJar = new File(runtimeDir, "lwjgl.jar");
         File mioLibPatcher = new File(runtimeDir, "MioLibPatcher.jar");
-        String versionId = findVersionId(rawCommand);
 
         // cacio 的 Toolkit.loadLibraries 需要 libawt_xawt.so（Pojav stub），
         // bionic JVM 只从 sun.boot.library.path（jreHome/lib）加载 java.desktop 原生库。
@@ -200,6 +223,9 @@ public final class GameLaunch {
         // 默认会长时间阻塞导致卡加载界面。这里强制极短超时让请求快速失败，游戏可离线进主菜单。
         extra.add("-Dsun.net.client.defaultConnectTimeout=3000");
         extra.add("-Dsun.net.client.defaultReadTimeout=3000");
+        // JVM 崩溃（native SIGSEGV 等）时把 hs_err 写到固定位置（游戏目录），
+        // 不依赖进程存活/当前工作目录，保证崩溃后日志可读取。
+        extra.add("-XX:ErrorFile=" + new File(gameDir, "hs_err_%p.log").getAbsolutePath());
         extra.add("-Djava.library.path=" + jreHome.getAbsolutePath() + "/lib"
                 + ":" + context.getApplicationInfo().nativeLibraryDir);
         extra.add("-Dorg.lwjgl.opengl.libname=" + renderer.getGlLibName());
@@ -349,7 +375,7 @@ public final class GameLaunch {
             args.add(src.get(i));
         }
 
-        return JRE.launch(context, args, gameDir, renderer, config.vsync);
+        return JRE.launch(context, args, gameDir, renderer, config.vsync, javaMajor);
     }
 
     /**

@@ -226,6 +226,104 @@ object GameLogAnalyzer {
                 }
             ),
         ),
+        // ---- 启动器 app 崩溃（app_crash.log）----
+        // Android 13+ 广播注册：RECEIVER_EXPORTED/NOT_EXPORTED 缺失
+        LogPattern(
+            id = "android_receiver_flag",
+            regex = Pattern.compile(
+                "SecurityException.*RECEIVER_EXPORTED or RECEIVER_NOT_EXPORTED",
+                Pattern.DOTALL
+            ),
+            severity = Severity.ERROR,
+            title = "启动器兼容性错误（Android 13+）",
+            detail = "当前 Android 版本要求广播接收器必须声明导出属性，旧版启动器在此系统上会闪退。",
+            fix = Fix(
+                description = "更新启动器",
+                action = object : FixAction {
+                    override fun execute(context: android.content.Context, gameDir: File): Boolean = false
+                    override fun describe(): String =
+                        "这是启动器 bug，请更新到最新版 MioLauncher（已修复 Android 13+ 兼容）。"
+                }
+            ),
+        ),
+        // 模组不兼容 / 崩溃：缺少类 / 版本不匹配
+        LogPattern(
+            id = "mod_incompatible",
+            regex = Pattern.compile(
+                "(?:NoClassDefFoundError|NoSuchMethodError|ClassNotFoundException|UnsupportedClassVersionError).*(?:mod|fabric|forge|neoforge)",
+                Pattern.DOTALL
+            ),
+            severity = Severity.ERROR,
+            title = "模组不兼容或缺失",
+            detail = "检测到与模组相关的类/方法错误，可能是模组版本不兼容、缺少前置模组，或模组与当前 Minecraft 版本不匹配。",
+            fix = Fix(
+                description = "检查模组",
+                action = object : FixAction {
+                    override fun execute(context: android.content.Context, gameDir: File): Boolean = false
+                    override fun describe(): String =
+                        "请到「模组中心」检查：1) 模组是否与当前 Minecraft 版本/加载器匹配；" +
+                        "2) 是否缺少前置模组（如 Fabric API）；3) 尝试移除最近安装的模组后重试。"
+                }
+            ),
+        ),
+        // libjimage native 崩溃（JRE 25 已知问题）
+        LogPattern(
+            id = "libjimage_crash",
+            regex = Pattern.compile(
+                "libjimage\\.so|JIMAGE_FindResource|SIGSEGV.*libjimage",
+                Pattern.DOTALL
+            ),
+            severity = Severity.ERROR,
+            title = "JRE 25 兼容性崩溃",
+            detail = "JVM 在 libjimage 组件崩溃，这是 JRE 25（用于 26.x 新版本）的已知兼容问题。",
+            fix = Fix(
+                description = "更换版本",
+                action = object : FixAction {
+                    override fun execute(context: android.content.Context, gameDir: File): Boolean = false
+                    override fun describe(): String =
+                        "该崩溃是 JRE 25 的上游 bug。请改用 1.21.x 或更早版本（内置 Java 21 稳定运行），" +
+                        "或等待启动器更新 JRE 25 修复。"
+                }
+            ),
+        ),
+        // native 库崩溃（libGLES/libpojavexec 等，通常是渲染器/驱动问题）
+        LogPattern(
+            id = "native_render_crash",
+            regex = Pattern.compile(
+                "(?:libGLES|libEGL|libng_gl4es|libgl4es|eglSwapBuffers|libpojavexec).*SIGSEGV",
+                Pattern.DOTALL
+            ),
+            severity = Severity.WARNING,
+            title = "渲染层原生崩溃",
+            detail = "渲染相关原生库崩溃，通常与设备 GPU 驱动或渲染器兼容性有关。",
+            fix = Fix(
+                description = "切换渲染器",
+                action = object : FixAction {
+                    override fun execute(context: android.content.Context, gameDir: File): Boolean = false
+                    override fun describe(): String =
+                        "请在「启动设置」中尝试切换渲染器（如改为 GL4ES 或 OSMesa），或降低渲染分辨率后重试。"
+                }
+            ),
+        ),
+        // 内存不足（启动器/OOM）
+        LogPattern(
+            id = "launcher_oom",
+            regex = Pattern.compile(
+                "(?:OutOfMemoryError|Could not allocate|insufficient memory|lmkd|LMK)",
+                Pattern.DOTALL
+            ),
+            severity = Severity.ERROR,
+            title = "内存不足",
+            detail = "检测到内存不足，可能是设备可用内存紧张或游戏内存设置过高。",
+            fix = Fix(
+                description = "调整内存",
+                action = object : FixAction {
+                    override fun execute(context: android.content.Context, gameDir: File): Boolean = false
+                    override fun describe(): String =
+                        "请关闭后台应用释放内存，或在「启动设置」中降低游戏内存/关闭内存扩展。"
+                }
+            ),
+        ),
     )
 
     // ─── 分析入口 ───────────────────────────────────────────────
@@ -270,6 +368,9 @@ object GameLogAnalyzer {
         // JVM 控制台输出
         val gameLog = File(context.filesDir, "mio/logs/game.log")
         if (gameLog.isFile) files.add(gameLog)
+        // 启动器 app 崩溃日志（闪退时由全局崩溃捕获写入）
+        val appCrash = File(context.filesDir, "mio/logs/app_crash.log")
+        if (appCrash.isFile) files.add(appCrash)
         // MC latest.log
         val mcGameDir = File(context.filesDir, "mio/game")
         val latestLog = File(mcGameDir, "logs/latest.log")

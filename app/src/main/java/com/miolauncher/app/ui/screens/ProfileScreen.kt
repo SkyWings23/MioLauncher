@@ -236,15 +236,29 @@ fun ProfileScreen(
             text = {
                 Column {
                     Text("欢迎加入 MioLauncher 玩家交流群：", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.height(4.dp))
-                    Text("交流群：1079023595", fontWeight = FontWeight.Bold, color = MioGreen)
+                    Spacer(Modifier.height(8.dp))
+                    JoinButton(
+                        text = "交流群：1079023595",
+                        color = MioGreen,
+                        onClick = {
+                            showJoinUs = false
+                            openQQGroup(context, "1079023595")
+                        },
+                    )
                     Spacer(Modifier.height(12.dp))
                     Text("遇到 Bug / 问题？请前往 Bug 提交群反馈：", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.height(4.dp))
-                    Text("Bug 提交群：601765045", fontWeight = FontWeight.Bold, color = MioGreen)
+                    Spacer(Modifier.height(8.dp))
+                    JoinButton(
+                        text = "Bug 提交群：601765045",
+                        color = androidx.compose.ui.graphics.Color(0xFFE07020),
+                        onClick = {
+                            showJoinUs = false
+                            openQQGroup(context, "601765045")
+                        },
+                    )
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        "请复制群号到 QQ 中搜索加入。",
+                        "点击上方按钮可直接跳转 QQ 加入群聊；未安装 QQ 时请复制群号搜索。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -611,4 +625,46 @@ private fun DebugJvmTest() {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+/** 加入群聊按钮（可点击跳转 QQ） */
+@Composable
+private fun JoinButton(text: String, color: androidx.compose.ui.graphics.Color, onClick: () -> Unit) {
+    androidx.compose.material3.Surface(
+        onClick = onClick,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+        color = color.copy(alpha = 0.15f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            text = text,
+            color = color,
+            fontWeight = FontWeight.Bold,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.padding(vertical = 12.dp).fillMaxWidth(),
+        )
+    }
+}
+
+/** 通过 QQ 协议跳转到群聊（未装 QQ 时 fallback 复制群号） */
+private fun openQQGroup(context: android.content.Context, groupId: String) {
+    val uris = listOf(
+        "mqqwpa://im/chat?chat_type=group&uin=$groupId&version=1",
+        "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=$groupId",
+    )
+    for (uri in uris) {
+        try {
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(uri))
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            return
+        } catch (_: Exception) {}
+    }
+    // 兜底：复制群号并提示
+    try {
+        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        cm?.setPrimaryClip(android.content.ClipData.newPlainText("群号", groupId))
+        android.widget.Toast.makeText(context, "未找到 QQ，已复制群号：$groupId", android.widget.Toast.LENGTH_LONG).show()
+    } catch (_: Exception) {}
 }

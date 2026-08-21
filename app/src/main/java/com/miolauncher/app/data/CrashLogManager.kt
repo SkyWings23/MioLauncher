@@ -93,6 +93,85 @@ object CrashLogManager {
         context, "crash-${System.currentTimeMillis()}.txt", report.combined,
     )
 
+    // ---- 启动标记机制：异常退出（含 native 崩溃/被系统杀）也能检测 ----
+
+    /** 启动标记文件（游戏目录下；正常退出会删除，残留=异常崩溃） */
+    private fun crashMarker(context: Context): File =
+        File(gameDir(context), ".mio_crash_marker")
+
+    /** 游戏启动前写入标记（内容：版本 + 时间） */
+    fun markGameStart(context: Context, versionId: String) {
+        try {
+            crashMarker(context).writeText(
+                "version=$versionId\ntime=${System.currentTimeMillis()}\n" +
+                    java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                        .format(java.util.Date()),
+            )
+        } catch (_: Exception) {}
+    }
+
+    /** 游戏正常退出时清除标记 */
+    fun markGameExited(context: Context) {
+        try { crashMarker(context).delete() } catch (_: Exception) {}
+    }
+
+    /** 是否残留标记（= 上次游戏异常崩溃，进程未正常走退出流程） */
+    fun hasStaleCrashMarker(context: Context): Boolean {
+        return try {
+            val m = crashMarker(context)
+            m.exists() && m.lastModified() > consumedMs(context)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** 无条件构造崩溃报告（不依赖 crash 文件，用于标记残留/异常退出时兜底）。
+     * 收集 game.log + latest.log + hs_err + app_crash.log。 */
+    fun buildCrashReport(context: Context): CrashReport {
+        val gameLog = File(context.filesDir, "mio/logs/game.log")
+        val appCrash = File(context.filesDir, "mio/logs/app_crash.log")
+        val latest = File(gameDir(context), "logs/latest.log")
+        val hsErr = hsErrFiles(context).firstOrNull()
+
+        val combined = buildString {
+            append("===== MioLauncher 崩溃日志（异常退出） =====").append('\n')
+            append("时间：").append(java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                .format(java.util.Date())).append('\n')
+            append('\n')
+            if (appCrash.isFile) {
+                append("──────── 启动器崩溃 app_crash.log ────────").append('\n')
+                append(readTail(appCrash, 150)).append('\n').append('\n')
+            }
+            if (hsErr != null) {
+                append("──────── JVM 错误日志 ────────").append('\n')
+                append(readTail(hsErr, 200)).append('\n').append('\n')
+            }
+            if (latest.isFile) {
+                append("──────── 游戏日志 latest.log ────────").append('\n')
+                append(readTail(latest, 200)).append('\n').append('\n')
+            }
+            append("──────── JVM 控制台输出 game.log ────────").append('\n')
+            append(readTail(gameLog, 200))
+        }
+        val title = when {
+            appCrash.isFile -> "启动器崩溃"
+            hsErr != null -> "JVM 崩溃"
+            else -> "游戏异常退出"
+        }
+        val summary = when {
+            appCrash.isFile -> "启动器 app 闪退，详见 app_crash.log"
+            hsErr != null -> "JVM 崩溃，详见 hs_err"
+            else -> "上次游戏未能正常退出，已收集日志"
+        }
+        return CrashReport(
+            title = title,
+            summary = summary,
+            primaryPath = hsErr?.absolutePath ?: appCrash.absolutePath,
+            evidence = emptyList(),
+            combined = combined,
+        )
+    }
+
     /** 通用导出：写入应用外部目录 MioLogs/，返回文件（失败返回 null） */
     fun exportText(context: Context, fileName: String, content: String): File? {
         return try {

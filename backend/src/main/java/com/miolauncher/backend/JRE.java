@@ -25,25 +25,56 @@ import java.util.List;
  */
 public final class JRE {
 
-    public static final String JRE_DIR = "mio/jre";
+    /** 默认 JRE 主版本（APK 内置的最低保障版本） */
+    public static final int DEFAULT_JAVA_MAJOR = 21;
+    /** 旧版 JRE 目录名（兼容） */
+    public static final String JRE_DIR = "mio/jre21";
 
     private JRE() {}
 
+    /** 指定主版本对应的 JRE 目录（filesDir/mio/jre<javaMajor>） */
+    public static File jreDir(Context context, int javaMajor) {
+        return new File(context.getFilesDir(), "mio/jre" + javaMajor);
+    }
+
     /**
-     * 返回 JRE 主目录（filesDir/mio/jre），若不存在则返回 null。
+     * 返回默认（21）JRE 主目录，若不存在则返回 null。
      */
     public static File getJreHome(Context context) {
-        File dir = new File(context.getFilesDir(), JRE_DIR);
+        return getJreHome(context, DEFAULT_JAVA_MAJOR);
+    }
+
+    /** 返回指定主版本的 JRE 主目录，若不存在则返回 null。 */
+    public static File getJreHome(Context context, int javaMajor) {
+        File dir = jreDir(context, javaMajor);
         return dir.isDirectory() ? dir : null;
     }
 
     public static boolean isInstalled(Context context) {
-        File jre = getJreHome(context);
-        if (jre == null) return false;
+        return isInstalled(context, DEFAULT_JAVA_MAJOR);
+    }
+
+    public static boolean isInstalled(Context context, int javaMajor) {
+        File jre = jreDir(context, javaMajor);
         // 同时校验 libjvm.so 与核心模块镜像 lib/modules（缺 modules 会 JVM 无法启动：
         // "Failed setting boot class path"）。任一缺失视为未安装，触发重新解压。
-        return new File(jre, "lib/server/libjvm.so").exists()
+        return jre.isDirectory()
+                && new File(jre, "lib/server/libjvm.so").exists()
                 && new File(jre, "lib/modules").exists();
+    }
+
+    /**
+     * 确保指定版本的 JRE 已安装（未安装则从 assets 解压）。
+     * 版本资产缺失时回退到默认 21（避免旧 APK 资产不齐全导致启动失败）。
+     */
+    public static void ensureInstalled(Context context, int javaMajor) throws Exception {
+        if (isInstalled(context, javaMajor)) return;
+        try {
+            install(context, javaMajor, null);
+        } catch (java.io.IOException e) {
+            android.util.Log.w("MioJRE", "JRE " + javaMajor + " 资产缺失，回退到 " + DEFAULT_JAVA_MAJOR, e);
+            install(context, DEFAULT_JAVA_MAJOR, null);
+        }
     }
 
     /** 运行时资源目录（lwjgl.jar / MioLibPatcher.jar 解压到这里）。 */
@@ -83,30 +114,43 @@ public final class JRE {
     }
 
     /**
-     * 当前运行 ABI 对应的 JRE 资产名（assets/components/jre-21/ 下的合并包）。
+     * 当前运行 ABI 对应的 JRE 资产名（assets/components/jre-<major>/ 下的合并包）。
      */
-    public static String jreAssetForAbi(Context context) {
+    public static String jreAssetForAbi(Context context, int javaMajor) {
         String abi = Build.SUPPORTED_ABIS != null && Build.SUPPORTED_ABIS.length > 0
                 ? Build.SUPPORTED_ABIS[0] : "arm64-v8a";
-        if (abi.startsWith("armeabi")) return "jre21-armeabi-v7a.tar.xz";
-        if (abi.startsWith("x86_64") || abi.startsWith("x86")) return "jre21-x86_64.tar.xz";
-        return "jre21-arm64-v8a.tar.xz";
+        String v = "jre" + javaMajor;
+        if (abi.startsWith("armeabi")) return v + "-armeabi-v7a.tar.xz";
+        if (abi.startsWith("x86_64") || abi.startsWith("x86")) return v + "-x86_64.tar.xz";
+        return v + "-arm64-v8a.tar.xz";
+    }
+
+    /** 默认（21）版本资产名 */
+    public static String jreAssetForAbi(Context context) {
+        return jreAssetForAbi(context, DEFAULT_JAVA_MAJOR);
     }
 
     /**
-     * 从 APK assets 解压 JRE（首次启动调用）。
+     * 从 APK assets 解压 JRE（首次启动调用）。默认安装 Java 21。
+     */
+    public static void install(Context context, java.util.function.DoubleConsumer onProgress) throws Exception {
+        install(context, DEFAULT_JAVA_MAJOR, onProgress);
+    }
+
+    /**
+     * 从 APK assets 解压指定版本的 JRE。
      *
      * @param onProgress 进度回调 (0..1)
      */
-    public static void install(Context context, java.util.function.DoubleConsumer onProgress) throws Exception {
-        File jreHome = new File(context.getFilesDir(), JRE_DIR);
-        if (isInstalled(context)) return;
+    public static void install(Context context, int javaMajor, java.util.function.DoubleConsumer onProgress) throws Exception {
+        File jreHome = jreDir(context, javaMajor);
+        if (isInstalled(context, javaMajor)) return;
 
-        File tmp = new File(context.getFilesDir(), JRE_DIR + ".tmp");
+        File tmp = new File(context.getFilesDir(), "mio/jre" + javaMajor + ".tmp");
         deleteRecursively(tmp);
         tmp.mkdirs();
 
-        String asset = "components/jre-21/" + jreAssetForAbi(context);
+        String asset = "components/jre-" + javaMajor + "/" + jreAssetForAbi(context, javaMajor);
         InputStream in = context.getAssets().open(asset);
         XZCompressorInputStream xz = new XZCompressorInputStream(new BufferedInputStream(in));
         TarArchiveInputStream tar = new TarArchiveInputStream(xz);
@@ -140,7 +184,7 @@ public final class JRE {
         // 设置执行权限（assets 解压后默认无 exec 位）
         setExecutable(tmp);
 
-        File old = new File(context.getFilesDir(), JRE_DIR + ".old");
+        File old = new File(context.getFilesDir(), "mio/jre" + javaMajor + ".old");
         deleteRecursively(old);
         if (jreHome.exists()) {
             if (!jreHome.renameTo(old)) {
@@ -196,9 +240,14 @@ public final class JRE {
     }
 
     public static int launch(Context context, List<String> args, File workDir, Renderer renderer, boolean vsync) throws Exception {
-        File jreHome = getJreHome(context);
+        return launch(context, args, workDir, renderer, vsync, DEFAULT_JAVA_MAJOR);
+    }
+
+    /** 按指定 Java 主版本选择 JRE 启动（如 26.x 用 Java 25） */
+    public static int launch(Context context, List<String> args, File workDir, Renderer renderer, boolean vsync, int javaMajor) throws Exception {
+        File jreHome = getJreHome(context, javaMajor);
         if (jreHome == null) {
-            throw new IllegalStateException("JRE 未安装，请先下载 Java 运行时");
+            throw new IllegalStateException("JRE " + javaMajor + " 未安装，请先下载 Java 运行时");
         }
         setEnvironment(jreHome, context.getApplicationInfo().nativeLibraryDir, renderer, vsync);
 

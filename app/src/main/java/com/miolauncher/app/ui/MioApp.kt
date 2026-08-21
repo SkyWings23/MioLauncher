@@ -84,11 +84,26 @@ fun MioApp() {
     var launching by remember { mutableStateOf(false) }
     // 启动失败原因（Java 不兼容等）→ App 内自定义弹窗完整展示，避免系统 Toast 显示不全
     var launchErrorMsg by remember { mutableStateOf<String?>(null) }
-    // 上次游戏崩溃日志（启动时检测，覆盖原生崩溃进程直接死亡的场景）
+    // 上次游戏崩溃日志（启动时检测，覆盖原生崩溃进程直接死亡的场景）+ 自动诊断
     var crashReport by remember { mutableStateOf<com.miolauncher.app.data.CrashLogManager.CrashReport?>(null) }
+    var crashDiagnoses by remember { mutableStateOf<List<com.miolauncher.backend.GameLogAnalyzer.Diagnosis>>(emptyList()) }
     LaunchedEffect(Unit) {
-        if (withContext(Dispatchers.IO) { com.miolauncher.app.data.CrashLogManager.hasUnviewedCrash(context) }) {
-            crashReport = withContext(Dispatchers.IO) { com.miolauncher.app.data.CrashLogManager.collect(context) }
+        val hasCrash = withContext(Dispatchers.IO) {
+            com.miolauncher.app.data.CrashLogManager.hasUnviewedCrash(context) ||
+                com.miolauncher.app.data.CrashLogManager.hasStaleCrashMarker(context)
+        }
+        if (hasCrash) {
+            val report = withContext(Dispatchers.IO) {
+                com.miolauncher.app.data.CrashLogManager.collect(context)
+                    ?: com.miolauncher.app.data.CrashLogManager.buildCrashReport(context)
+            }
+            if (report != null) {
+                crashReport = report
+                // 自动分析日志并给出处理建议
+                crashDiagnoses = withContext(Dispatchers.IO) {
+                    com.miolauncher.backend.GameLogAnalyzer.analyzeGameLogs(context)
+                }
+            }
         }
     }
 
@@ -238,8 +253,10 @@ fun MioApp() {
         crashReport?.let { report ->
             CrashLogDialog(
                 report = report,
+                diagnoses = crashDiagnoses,
                 onDismiss = {
                     crashReport = null
+                    crashDiagnoses = emptyList()
                     com.miolauncher.app.data.CrashLogManager.consume(context)
                 },
             )
@@ -291,6 +308,7 @@ private fun AppNoticeDialog(
 @Composable
 private fun CrashLogDialog(
     report: com.miolauncher.app.data.CrashLogManager.CrashReport,
+    diagnoses: List<com.miolauncher.backend.GameLogAnalyzer.Diagnosis> = emptyList(),
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -305,6 +323,32 @@ private fun CrashLogDialog(
             Spacer(Modifier.height(4.dp))
             Text(report.title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(10.dp))
+            // 自动诊断 + 处理建议
+            if (diagnoses.isNotEmpty()) {
+                Text("🔍 自动诊断与处理建议", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MioGreen)
+                Spacer(Modifier.height(6.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(140.dp)
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                        )
+                        .padding(10.dp)
+                        .verticalScroll(androidx.compose.foundation.rememberScrollState()),
+                ) {
+                    Text(
+                        com.miolauncher.backend.GameLogAnalyzer.formatReport(diagnoses),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        color = Color.White,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
             Box(
                 Modifier
                     .fillMaxWidth()

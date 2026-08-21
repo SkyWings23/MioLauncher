@@ -42,12 +42,20 @@ class GameActivity : ComponentActivity() {
             finish()
             return
         }
-        // 调试：THREADDUMP 广播 → SIGQUIT
-        registerReceiver(object : android.content.BroadcastReceiver() {
+        // 尽早写启动标记：即使启动早期崩溃（JRE 解压/JNI 加载等），下次启动也能检测到
+        com.miolauncher.app.data.CrashLogManager.markGameStart(this, versionId)
+        // 调试：THREADDUMP 广播 → SIGQUIT（Android 13+ 必须指定 RECEIVER_EXPORTED/NOT_EXPORTED）
+        val threadDumpReceiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
                 android.os.Process.sendSignal(android.os.Process.myPid(), 3)
             }
-        }, android.content.IntentFilter("com.miolauncher.app.THREADDUMP"))
+        }
+        val threadDumpFilter = android.content.IntentFilter("com.miolauncher.app.THREADDUMP")
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(threadDumpReceiver, threadDumpFilter, android.content.Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(threadDumpReceiver, threadDumpFilter)
+        }
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.decorView.systemUiVisibility = (
@@ -508,20 +516,41 @@ class GameActivity : ComponentActivity() {
                     }
                     // 记录启动前已有崩溃证据时间，用于本次会话崩溃检测
                     val crashBaseline = com.miolauncher.app.data.CrashLogManager.newestCrashTime(this@GameActivity)
+                    // 写启动标记：任何异常退出（native 崩溃/被系统杀）都会残留，下次启动可检测
+                    com.miolauncher.app.data.CrashLogManager.markGameStart(this@GameActivity, versionId)
                     val startMs = System.currentTimeMillis()
                     val code = GameLaunch.launch(this@GameActivity, effectiveGameDir, cmd,
                         CallbackBridge.windowWidth, CallbackBridge.windowHeight, renderer, cfg)
                     val elapsed = System.currentTimeMillis() - startMs
                     android.util.Log.d("GameActivity", "launch: JVM returned code=$code after ${elapsed}ms")
-                    // 本次会话产生新崩溃 → 运行日志自动分析 + 弹出崩溃日志
-                    if (com.miolauncher.app.data.CrashLogManager.newestCrashTime(this@GameActivity) > crashBaseline) {
+                    // JVM 正常返回（游戏主动退出）→ 清除启动标记
+                    if (code == 0) {
+                        com.miolauncher.app.data.CrashLogManager.markGameExited(this@GameActivity)
+                    }
+                    // 本次会话产生新崩溃 或 JVM 异常返回码 → 运行日志自动分析 + 弹出崩溃日志
+                    val newCrash = com.miolauncher.app.data.CrashLogManager.newestCrashTime(this@GameActivity) > crashBaseline
+                    val jvmFailed = code != 0
+                    if (newCrash || jvmFailed) {
                         // 日志自动分析
                         val diagnoses = com.miolauncher.backend.GameLogAnalyzer.analyzeGameLogs(this@GameActivity)
                         if (diagnoses.isNotEmpty()) {
-                            android.util.Log.w("GameActivity", "launch: 日志诊断发现 ${diagnoses.size} 个问题")
+                            android.util.Log.w("GameActivity", "launch: 日志诊断发现 ${diagnoses.size} 个问题 (newCrash=$newCrash jvmFailed=$jvmFailed)")
                             val report = com.miolauncher.app.data.CrashLogManager.collect(this@GameActivity)
                             if (report != null) {
                                 withContext(Dispatchers.Main) { showCrashDialog(report, diagnoses) }
+                            } else {
+                                // 无 crash 文件但 JVM 失败：用日志构造一个报告
+                                val content = runCatching {
+                                    java.io.File(filesDir, "mio/logs/game.log").readText().takeLast(4000)
+                                }.getOrDefault("（无日志）")
+                                val fallback = com.miolauncher.app.data.CrashLogManager.CrashReport(
+                                    title = "游戏启动异常",
+                                    summary = "JVM 返回码 $code，请查看下方日志了解原因。",
+                                    primaryPath = null,
+                                    evidence = emptyList(),
+                                    combined = content,
+                                )
+                                withContext(Dispatchers.Main) { showCrashDialog(fallback, diagnoses) }
                             }
                         } else {
                             val report = com.miolauncher.app.data.CrashLogManager.collect(this@GameActivity)
@@ -558,8 +587,24 @@ class GameActivity : ComponentActivity() {
                     }
                 } catch (e: Exception) {
                     android.util.Log.e("GameActivity", "启动失败", e)
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@GameActivity, "启动失败: ${e.message}", Toast.LENGTH_LONG).show()
+                    // 异常启动失败：分析日志并弹出诊断（放宽判定，确保用户能看到原因）
+                    try {
+                        val diagnoses = com.miolauncher.backend.GameLogAnalyzer.analyzeGameLogs(this@GameActivity)
+                        val content = runCatching {
+                            java.io.File(filesDir, "mio/logs/game.log").readText().takeLast(4000)
+                        }.getOrDefault("（无日志）")
+                        val fallback = com.miolauncher.app.data.CrashLogManager.CrashReport(
+                            title = "游戏启动异常",
+                            summary = "${e.javaClass.simpleName}: ${e.message ?: "未知错误"}",
+                            primaryPath = null,
+                            evidence = emptyList(),
+                            combined = content,
+                        )
+                        withContext(Dispatchers.Main) { showCrashDialog(fallback, diagnoses) }
+                    } catch (_: Exception) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@GameActivity, "启动失败: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
                     }
                 }
             }
@@ -627,7 +672,7 @@ class GameActivity : ComponentActivity() {
                     text = com.miolauncher.backend.GameLogAnalyzer.formatReport(diagnoses)
                     setTextSize(12f)
                     typeface = android.graphics.Typeface.MONOSPACE
-                    setTextColor(0xFFBBBBBB.toInt())
+                    setTextColor(0xFFFFFFFF.toInt())
                 })
             }
             root.addView(diagScroll, android.widget.LinearLayout.LayoutParams(
@@ -639,6 +684,7 @@ class GameActivity : ComponentActivity() {
                 text = report.summary
                 setTextSize(12f)
                 typeface = android.graphics.Typeface.MONOSPACE
+                setTextColor(0xFFFFFFFF.toInt())
             })
         }
         root.addView(scroll, android.widget.LinearLayout.LayoutParams(
