@@ -140,31 +140,42 @@ object ResourceInstaller {
                     onStatus("下载前置：${file.filename}")
                     DownloadManager.setStage(taskId, "前置：${file.filename}")
                 }
-                val conn = URL(ModrinthApi.fileDownloadUrl(file.url)).openConnection() as HttpURLConnection
-                try {
-                    conn.connectTimeout = 15000
-                    conn.readTimeout = 20000
-                    conn.setRequestProperty("User-Agent", "MioLauncher/0.1.0")
-                    if (conn.responseCode !in 200..299) {
-                        throw InstallException("下载失败 HTTP ${conn.responseCode}（${file.filename}）")
-                    }
-                    val buf = ByteArray(65536)
-                    conn.inputStream.use { input ->
-                        out.outputStream().use { output ->
-                            while (true) {
-                                val n = input.read(buf)
-                                if (n < 0) break
-                                output.write(buf, 0, n)
-                                DownloadManager.addBytes(taskId, n.toLong())
+                // 依次尝试镜像候选（mcimirror → 官方 cdn），单个失败立即换下一个，避免卡死
+                val candidates = ModrinthApi.fileDownloadUrlCandidates(file.url)
+                var lastErr: Exception? = null
+                for (cand in candidates) {
+                    try {
+                        val conn = URL(cand).openConnection() as HttpURLConnection
+                        try {
+                            conn.connectTimeout = 10000
+                            conn.readTimeout = 15000
+                            conn.setRequestProperty("User-Agent", "MioLauncher/0.1.0")
+                            if (conn.responseCode !in 200..299) {
+                                throw InstallException("下载失败 HTTP ${conn.responseCode}（${file.filename}）")
                             }
+                            val buf = ByteArray(65536)
+                            conn.inputStream.use { input ->
+                                out.outputStream().use { output ->
+                                    while (true) {
+                                        val n = input.read(buf)
+                                        if (n < 0) break
+                                        output.write(buf, 0, n)
+                                        DownloadManager.addBytes(taskId, n.toLong())
+                                    }
+                                }
+                            }
+                            DownloadManager.fileDone(taskId)
+                            installed.add(file.filename)
+                            return
+                        } finally {
+                            conn.disconnect()
                         }
+                    } catch (e: Exception) {
+                        lastErr = e
+                        out.delete()
                     }
-                    DownloadManager.fileDone(taskId)
-                    installed.add(file.filename)
-                } catch (e: Exception) {
-                    out.delete()
-                    throw InstallException("下载失败：${e.message}", e)
                 }
+                throw lastErr ?: InstallException("下载失败（${file.filename}）")
             }
 
             downloadFile(chosen, dep = false)

@@ -104,23 +104,35 @@ object ModrinthApi {
     private fun cdnWithBase(url: String, base: String): String =
         url.replace("https://cdn.modrinth.com", base)
 
-    /** 获取可用的文件下载 URL（CDN 镜像优先） */
+    /** 获取可用的文件下载 URL 候选（镜像优先，官方兜底）。HEAD 检查快速失败（2s）。 */
+    fun fileDownloadUrlCandidates(original: String): List<String> {
+        val result = mutableListOf<String>()
+        for (base in CDN_BASES) {
+            val u = cdnWithBase(original, base)
+            if (u == original) continue
+            result.add(u)
+        }
+        result.add(original)
+        return result
+    }
+
+    /** 获取可用的文件下载 URL（CDN 镜像优先，HEAD 快速检查） */
     fun fileDownloadUrl(original: String): String {
         for (base in CDN_BASES) {
             val u = cdnWithBase(original, base)
             if (u == original) return original
-            if (HttpUtils.checkReachable(u)) return u
+            if (HttpUtils.checkReachable(u, 2500)) return u
         }
         return original
     }
 
     private object HttpUtils {
-        fun checkReachable(url: String): Boolean {
+        fun checkReachable(url: String, timeoutMs: Int = 5000): Boolean {
             return try {
                 val conn = URL(url).openConnection() as HttpURLConnection
                 try {
-                    conn.connectTimeout = 5000
-                    conn.readTimeout = 5000
+                    conn.connectTimeout = timeoutMs
+                    conn.readTimeout = timeoutMs
                     conn.requestMethod = "HEAD"
                     conn.setRequestProperty("User-Agent", "MioLauncher/0.1.0")
                     conn.responseCode in 200..299
