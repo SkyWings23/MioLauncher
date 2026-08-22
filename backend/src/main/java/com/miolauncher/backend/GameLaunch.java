@@ -392,10 +392,12 @@ public final class GameLaunch {
         }
         for (int i = 0; i < mainIdx; i++) {
             String arg = src.get(i);
-            // 过滤 JRE 21 不支持的参数（新版 HMCL 为 Java 24+ 生成，JRE 21 无法识别会直接启动失败）
-            if (arg.startsWith("--sun-misc-unsafe-memory-access")
-                    || arg.startsWith("--enable-native-access")) {
-                android.util.Log.i("MioGame", "filter JRE21-unsupported arg: " + arg);
+            // 过滤 JRE 不支持的参数：--enable-native-access/--sun-misc-unsafe-memory-access 是
+            // Java 24+ 参数，仅 JRE 21 及以下无法识别。Java 25（26.x 版本）需要保留。
+            if ((arg.startsWith("--sun-misc-unsafe-memory-access")
+                    || arg.startsWith("--enable-native-access"))
+                    && javaMajor < 25) {
+                android.util.Log.i("MioGame", "filter JRE" + javaMajor + "-unsupported arg: " + arg);
                 continue;
             }
             // 替换 HMCL 生成的无效 -Djava.library.path
@@ -403,13 +405,19 @@ public final class GameLaunch {
                 args.add(extra.get(0));
             } else if ("-cp".equals(arg) && i + 1 < src.size()) {
                 // 用 FCL 的 lwjgl.jar 前置 classpath，覆盖游戏自带 LWJGL。
-                // Java 8 老版本（如 Beta 1.0）用 LWJGL 2，前置 LWJGL 3 会冲突，跳过。
                 if (javaMajor >= 9) {
                     args.add(arg);
                     args.add(lwjglJar.getAbsolutePath() + java.io.File.pathSeparator + dedupeClasspath(src.get(i + 1)));
                 } else {
+                    // Java 8 老版本（如 Beta 1.0）用 LWJGL 2。保持原 classpath（含游戏自带 LWJGL2），
+                    // 末尾追加 FCL 的 lwjglx.jar（LWJGL2→LWJGL3 桥接），使老版本能跑在 Android 的 LWJGL3 上。
+                    String cp = dedupeClasspath(src.get(i + 1));
+                    File lwjglx = new File(runtimeDir, "lwjglx.jar");
+                    if (lwjglx.isFile()) {
+                        cp = cp + java.io.File.pathSeparator + lwjglx.getAbsolutePath();
+                    }
                     args.add(arg);
-                    args.add(dedupeClasspath(src.get(i + 1)));
+                    args.add(cp);
                 }
                 i++;
             } else {

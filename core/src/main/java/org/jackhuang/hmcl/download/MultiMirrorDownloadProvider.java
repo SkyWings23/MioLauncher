@@ -35,6 +35,7 @@ public final class MultiMirrorDownloadProvider implements DownloadProvider {
 
     @Override
     public List<URI> getVersionListURLs() {
+        // 版本清单（小文件）优先走 Mojang 官方（稳定，bmclapi CDN 防盗链不稳定）
         LinkedHashSet<URI> urls = new LinkedHashSet<>();
         urls.addAll(mojang.getVersionListURLs());
         for (DownloadProvider mirror : mirrors) {
