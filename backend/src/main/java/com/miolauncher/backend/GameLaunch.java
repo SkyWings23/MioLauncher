@@ -235,8 +235,6 @@ public final class GameLaunch {
         extra.add("-Dorg.lwjgl.opengl.libname=" + renderer.getGlLibName());
         extra.add("-Dorg.lwjgl.freetype.libname=" + context.getApplicationInfo().nativeLibraryDir + "/libfreetype.so");
         extra.add("-Dorg.lwjgl.spvc.libname=spirv-cross-c-shared");
-        // 对齐 FCL：LWJGL 用系统内存分配器（Android 无 jemalloc，避免警告/兼容问题）
-        extra.add("-Dorg.lwjgl.system.allocator=system");
         // FCL 全套 AWT/Cacio 配置（Caciocavallo 纯 Java AWT，替 Android 提供 java.awt）
         File cacioDir = new File(runtimeDir, "caciocavallo17");
         File cacioAgent = new File(cacioDir, "cacio-agent.jar");
@@ -500,9 +498,8 @@ public final class GameLaunch {
         int rw = windowW;
         int rh = windowH;
         int maxFps = cfg.maxFps <= 0 ? 100000 : cfg.maxFps;
-        // 模拟距离：MC 1.21.x 取值范围 [5,33]，且不能超过渲染距离（超出视野仍被 tick，白耗 CPU 导致掉帧）
-        int simDist = Math.max(5, Math.min(cfg.simulationDistance, Math.max(5, cfg.renderDistance)));
-        simDist = Math.min(simDist, 33);
+        // 模拟距离不能超过渲染距离：否则超出视野的实体仍被 tick，白耗 CPU 导致掉帧
+        int simDist = Math.min(cfg.simulationDistance, Math.max(2, cfg.renderDistance));
         String[][] targets = {
                 {"lang:", "lang:" + (cfg.lang == null || cfg.lang.isEmpty() ? "zh_cn" : cfg.lang)},
                 {"guiScale:", "guiScale:" + cfg.guiScale},
@@ -512,19 +509,12 @@ public final class GameLaunch {
                 {"overrideWidth:", "overrideWidth:" + rw},
                 {"overrideHeight:", "overrideHeight:" + rh},
                 {"fov:", "fov:" + cfg.fov},
-                // 对齐 FCL：关闭精美画质，显著降低渲染负载，减少移动掉帧。
-                // 1.21.x 用 graphicsPreset；旧版本用 fancyGraphics，两者都写兼容。
-                {"graphicsPreset:", "graphicsPreset:\"fast\""},
-                {"fancyGraphics:", "fancyGraphics:false"},
-                // 关闭视角晃动，减少每帧运算
-                {"bobView:", "bobView:false"},
                 {"ao:", "ao:false"},
                 {"mipmapLevels:", "mipmapLevels:0"},
                 {"particles:", "particles:" + cfg.particles},
                 {"renderClouds:", "renderClouds:\"false\""},
                 {"entityDistanceScaling:", "entityDistanceScaling:0.5"},
                 {"biomeBlendRadius:", "biomeBlendRadius:0"},
-                {"enableVsync:", "enableVsync:false"},
         };
         List<String> out = new ArrayList<>();
         for (String[] t : targets) {
