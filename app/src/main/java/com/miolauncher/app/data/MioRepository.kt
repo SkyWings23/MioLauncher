@@ -136,8 +136,9 @@ class MioRepository(private val context: Context) {
 
         val task = builder.buildAsync()
 
-        // 用 Task 身份去重统计下载任务总数，避免 HMCL 的 Task 名不唯一导致的计数膨胀
+        // 用 Task 身份去重统计下载任务总数与完成数，避免 HMCL 的 Task 名不唯一导致的计数膨胀
         val seenTasks = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<org.jackhuang.hmcl.task.Task<*>, Boolean>())
+        val doneTasks = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<org.jackhuang.hmcl.task.Task<*>, Boolean>())
 
         val executor = task.executor(object : org.jackhuang.hmcl.task.TaskListener() {
             override fun onRunning(task: org.jackhuang.hmcl.task.Task<*>) {
@@ -155,7 +156,10 @@ class MioRepository(private val context: Context) {
             }
 
             override fun onFinished(task: org.jackhuang.hmcl.task.Task<*>) {
-                onTaskDone()
+                // 只对"运行过(onRunning)"的任务计数完成，避免父任务/未运行任务使完成数超过总数
+                if (seenTasks.contains(task) && doneTasks.add(task)) {
+                    onTaskDone()
+                }
                 onItem(task.getName() ?: "任务完成", 1f, true)
             }
         })

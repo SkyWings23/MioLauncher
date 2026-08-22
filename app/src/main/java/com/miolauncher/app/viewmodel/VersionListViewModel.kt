@@ -77,10 +77,12 @@ class VersionListViewModel : ViewModel() {
                     versionId = versionId,
                     loader = loader,
                     onStage = { stage, progress ->
-                        // 整体进度 = (已完成任务 + 当前任务进度) / 任务总数，跨阶段单调不倒退
+                        // 整体进度 = (已完成任务 + 当前任务进度) / 任务总数。
+                        // 分母取 max(taskCount, done+1)，避免当前任务未完成时进度提前到 100%
                         val taskCount = DownloadManager.task(taskId)?.filesTotal ?: 1
                         val done = DownloadManager.task(taskId)?.filesDone ?: 0
-                        val overall = ((done + progress.coerceIn(0f, 1f)) / taskCount.coerceAtLeast(1))
+                        val denom = maxOf(taskCount.coerceAtLeast(1), done + 1)
+                        val overall = ((done + progress.coerceIn(0f, 1f)) / denom)
                             .coerceIn(0f, 1f)
                         _installProgress.update { it?.copy(currentStage = stage, overallProgress = overall) }
                         DownloadManager.setStage(taskId, stage)
