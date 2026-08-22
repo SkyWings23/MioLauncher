@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -178,6 +179,49 @@ fun LaunchSettingsScreen(
         )
     }
 
+    // 渲染器选择弹窗（用居中 AlertDialog，避免滚动容器内 DropdownMenu 锚点错位）
+    if (rendererMenu) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { rendererMenu = false },
+            title = { Text(com.miolauncher.app.ui.theme.I18n.tr("ls.renderer"), fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Renderer.entries.forEach { r ->
+                        val selected = r == renderer
+                        Surface(
+                            onClick = { renderer = r; rendererMenu = false; markCustom() },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (selected) MioGreen.copy(alpha = 0.12f)
+                            else androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                        ) {
+                            Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(r.label, fontWeight = FontWeight.Bold, color = if (selected) MioGreen else MaterialTheme.colorScheme.onSurface)
+                                    if (selected) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Icon(Icons.Filled.CheckCircle, contentDescription = "当前", tint = MioGreen, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                                Text(
+                                    text = when (r) {
+                                        Renderer.NGGL4ES -> "默认，gl4es 直通系统 EGL，兼容性最好"
+                                        Renderer.GL4ES -> "与默认同库但强制 GLES2，适合旧设备"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { rendererMenu = false }) { Text("关闭") }
+            },
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
         // 顶栏
         Row(
@@ -232,11 +276,12 @@ fun LaunchSettingsScreen(
             ) {
                 Text(renderer.label, color = MioGreen, fontWeight = FontWeight.Medium)
             }
-            DropdownMenu(expanded = rendererMenu, onDismissRequest = { rendererMenu = false }) {
-                Renderer.entries.forEach { r ->
-                    DropdownMenuItem(text = { Text(r.label) }, onClick = { renderer = r; rendererMenu = false })
-                }
-            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "NG GL4ES 为默认且最稳定；GL4ES 兼容档适合旧设备。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.height(4.dp))
 
             // 内存

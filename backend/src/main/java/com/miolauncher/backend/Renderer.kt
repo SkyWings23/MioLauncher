@@ -3,9 +3,12 @@ package com.miolauncher.backend
 /**
  * 渲染后端。对应 APK 内置的真实 GL 实现：
  * - NGGL4ES：默认，gl4es 直通系统 EGL（通用性最好，已充分验证）
- * - GL4ES：经典 gl4es 1.1.4（兼容老机）
- * - ANGLE：Google 的 OpenGL ES → Vulkan 转换层（兼容无 GLES2 驱动的设备）
- * - OSMESA：Mesa 纯软件渲染（无需任何 GPU 驱动，全型号全 CPU 可跑）
+ * - GL4ES：兼容档，与默认同用 ng_gl4es（对齐 FCL 的 opengles2），强制 GLES2
+ *
+ * 说明：
+ * - native EGL 桥（egl_bridge.c）只识别以 "opengles" 开头的 renderer 名。
+ * - ANGLE（libGLESv2_angle.so）在此构建的原生桥下 eglCreateContext 崩溃，
+ *   OSMesa（libOSMesa_81.so）不导出标准 EGL 符号，二者都无法工作，故不提供。
  */
 enum class Renderer(
     val id: String,
@@ -29,33 +32,13 @@ enum class Renderer(
     ),
     GL4ES(
         id = "gl4es",
-        label = "GL4ES（兼容）",
-        glLibName = "libgl4es_114.so",
+        label = "GL4ES 兼容（GLES2）",
+        glLibName = "libng_gl4es.so",
         eglLibName = "libEGL.so",
         amethystRenderer = "opengles",
         glEsVersion = 2,
         glVersionCode = "20",
         isGl4es = true,
-    ),
-    ANGLE(
-        id = "angle",
-        label = "ANGLE（Vulkan）",
-        glLibName = "libGLESv2_angle.so",
-        eglLibName = "libEGL_angle.so",
-        amethystRenderer = "angle",
-        glEsVersion = 2,
-        glVersionCode = "20",
-        isGl4es = false,
-    ),
-    OSMESA(
-        id = "osmesa",
-        label = "OSMesa（纯软件）",
-        glLibName = "libOSMesa_81.so",
-        eglLibName = "libOSMesa_81.so",
-        amethystRenderer = "osmesa",
-        glEsVersion = 2,
-        glVersionCode = "20",
-        isGl4es = false,
     ),
     ;
 

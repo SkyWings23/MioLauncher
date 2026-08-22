@@ -445,21 +445,10 @@ class GameActivity : ComponentActivity() {
                     val ndir = applicationInfo.nativeLibraryDir
                     val settings = launchSettings
                     val renderer = settings.renderer
-                    // 按渲染后端预载对应 GL 库
+                    // 按渲染后端预载对应 GL 库（ANGLE/OSMesa 已移除，仅 gl4es 家族）
                     android.util.Log.d("GameActivity", "launch: renderer=${renderer.id} (${renderer.glLibName})")
-                    when {
-                        renderer == com.miolauncher.backend.Renderer.ANGLE -> {
-                            net.kdt.pojavlaunch.utils.JREUtils.dlopen("$ndir/libEGL_angle.so")
-                            net.kdt.pojavlaunch.utils.JREUtils.dlopen("$ndir/libGLESv2_angle.so")
-                        }
-                        renderer == com.miolauncher.backend.Renderer.OSMESA -> {
-                            net.kdt.pojavlaunch.utils.JREUtils.dlopen("$ndir/libOSMesa_81.so")
-                        }
-                        else -> {
-                            net.kdt.pojavlaunch.utils.JREUtils.dlopen("$ndir/${renderer.glLibName}")
-                            net.kdt.pojavlaunch.utils.JREUtils.dlopen("$ndir/libspirv-cross-c-shared.so")
-                        }
-                    }
+                    net.kdt.pojavlaunch.utils.JREUtils.dlopen("$ndir/${renderer.glLibName}")
+                    net.kdt.pojavlaunch.utils.JREUtils.dlopen("$ndir/libspirv-cross-c-shared.so")
                     net.kdt.pojavlaunch.utils.JREUtils.dlopen("$ndir/libopenal.so")
                     NativeInput.setInputReady(true)
                     NativeInput.sendWindowSize(CallbackBridge.windowWidth, CallbackBridge.windowHeight)

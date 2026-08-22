@@ -317,6 +317,9 @@ public final class GameLaunch {
         extra.add("-Duser.language=zh");
         extra.add("-Duser.country=CN");
         extra.add("-Duser.timezone=Asia/Shanghai");
+        // JNA（oshi 依赖）在 Android 上无法加载桌面版原生库（glibc 的 libc.so.6），
+        // 这里让 JNA 优先从 APK 内置的 Bionic 版 libjnidispatch.so（backend jniLibs 提供）
+        // 加载，使 oshi 的 CPU/内存探测正常，避免部分版本启动崩溃。
         extra.add("-Djna.boot.library.path=" + context.getApplicationInfo().nativeLibraryDir);
         extra.add("-Djna.tmpdir=" + cacheDir.getAbsolutePath());
         extra.add("-Dorg.lwjgl.system.SharedLibraryExtractPath=" + cacheDir.getAbsolutePath());

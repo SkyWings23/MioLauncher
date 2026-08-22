@@ -250,7 +250,7 @@ object GameLogAnalyzer {
         LogPattern(
             id = "mod_incompatible",
             regex = Pattern.compile(
-                "(?:NoClassDefFoundError|NoSuchMethodError|ClassNotFoundException|UnsupportedClassVersionError).*(?:mod|fabric|forge|neoforge)",
+                "(?:NoClassDefFoundError|NoSuchMethodError|ClassNotFoundException|UnsupportedClassVersionError)[\\s\\S]{0,250}?(?:mod|fabric|forge|neoforge)",
                 Pattern.DOTALL
             ),
             severity = Severity.ERROR,
@@ -368,7 +368,26 @@ object GameLogAnalyzer {
                 action = object : FixAction {
                     override fun execute(context: android.content.Context, gameDir: File): Boolean = false
                     override fun describe(): String =
-                        "请在「启动设置」中尝试切换渲染器（如改为 GL4ES 或 OSMesa），或降低渲染分辨率后重试。"
+                        "请在「启动设置」中切换渲染器（如改为 GL4ES 兼容档），或降低渲染分辨率后重试。"
+                }
+            ),
+        ),
+        // 渲染器初始化失败：EGL 桥未配置 / GL 库加载失败
+        LogPattern(
+            id = "renderer_config_error",
+            regex = Pattern.compile(
+                "EGLBridge: Renderer was not configured as a bridge|Failed to load renderer|Failed to load renderer library",
+                Pattern.DOTALL
+            ),
+            severity = Severity.ERROR,
+            title = "渲染器初始化失败",
+            detail = "选中的渲染后端无法初始化（EGL 桥未配置或 GL 库加载失败），导致游戏无法启动。",
+            fix = Fix(
+                description = "切回默认渲染器",
+                action = object : FixAction {
+                    override fun execute(context: android.content.Context, gameDir: File): Boolean = false
+                    override fun describe(): String =
+                        "请回到「启动设置」把渲染器切回「NG GL4ES（默认）」，或选择「GL4ES 兼容」后重新启动即可。"
                 }
             ),
         ),
@@ -513,9 +532,10 @@ object GameLogAnalyzer {
         "mod_incompatible", "mod_incompatible_launch", "mod_incompatible_found", "mod_mixin_failed",
     )
 
-    /** 容易误报的「伴随噪音」：非根因，常由进程收尾 / 库探测失败产生。 */
+    /** 容易误报的「伴随噪音」：非根因，常由进程收尾 / 库探测失败产生。
+     * 注意：native_render_crash 不在其中——渲染器/GPU 崩溃时它才是真正根因，必须保留展示。 */
     private val NOISE_IDS = setOf(
-        "class_not_found", "native_lib_failed", "native_render_crash", "cacio_warning",
+        "class_not_found", "lwjgl_native_fail", "cacio_fail",
     )
 
     /**
