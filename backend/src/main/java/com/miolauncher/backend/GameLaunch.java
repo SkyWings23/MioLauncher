@@ -282,8 +282,8 @@ public final class GameLaunch {
         // FCL 全套 AWT/Cacio 配置（Caciocavallo 纯 Java AWT，替 Android 提供 java.awt）
         // Java 8 老版本（B1.0 等）用 LWJGL2 + java.awt 窗口，需要 Java 8 版 cacio
         // （net.java.openjdk.cacio.ctc.CTCToolkit + -Xbootclasspath/p 前置）。
-        // Java 25+：cacio 的 AWT 依赖 libfontmanager 等，在 jre25 上加载失败（bionic namespace），
-        // 且 26.x 现代版本用 LWJGL 渲染不依赖 java.awt，故跳过 cacio。
+        // 现代版本（1.17+）：用 LWJGL 渲染不依赖 java.awt，cacio 反而在 bionic 上加载
+        // native awt 崩溃（Could not allocate library name / fontmanager 加载失败），故跳过。
         if (javaMajor < 9) {
             // Java 8 版 Caciocavallo（net.java.openjdk 包名）
             File cacio8Dir = new File(runtimeDir, "caciocavallo");
@@ -300,7 +300,7 @@ public final class GameLaunch {
                 extra.add("-Xbootclasspath/p:" + cacioAndroidNw.getAbsolutePath()
                         + File.pathSeparator + cacioShared8.getAbsolutePath());
             }
-        } else if (javaMajor >= 9 && javaMajor < 25) {
+        } else if (javaMajor >= 9 && javaMajor < 17) {
             File cacioDir = new File(runtimeDir, "caciocavallo17");
             File cacioAgent = new File(cacioDir, "cacio-agent.jar");
             extra.add("-Djava.awt.headless=false");
