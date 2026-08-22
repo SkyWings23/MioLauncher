@@ -212,7 +212,7 @@ fun ProfileScreen(
             title = { Text(com.miolauncher.app.ui.theme.I18n.tr("profile.about"), fontWeight = FontWeight.Bold) },
             text = {                Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "MioLauncher v0.1.0\n\n自由 · 开源 · 属于你的 Minecraft 启动器\n\nGPL-3.0",
+                        "MioLauncher v${com.miolauncher.app.BuildConfig.VERSION_NAME}\n\n自由 · 开源 · 属于你的 Minecraft 启动器\n\nGPL-3.0",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Spacer(Modifier.height(14.dp))
@@ -515,7 +515,7 @@ private fun SettingsGroup(
                 }
             },
         )
-        SettingRow(Icons.Filled.Person, com.miolauncher.app.ui.theme.I18n.tr("profile.about"), "v0.1.0 · GPL-3.0", onClick = onOpenAbout)
+        SettingRow(Icons.Filled.Person, com.miolauncher.app.ui.theme.I18n.tr("profile.about"), "v${com.miolauncher.app.BuildConfig.VERSION_NAME} · GPL-3.0", onClick = onOpenAbout)
         SettingRow(Icons.Filled.Group, "加入我们", "交流群 / Bug 提交群", onClick = onOpenJoinUs)
     }
 }
