@@ -262,7 +262,8 @@ fun MioApp() {
                                     )
                                 enter togetherWith exit
                             } else {
-                                fadeIn() togetherWith fadeOut()
+                                // 关闭动画：直接瞬切，不做任何过渡
+                                androidx.compose.animation.EnterTransition.None togetherWith androidx.compose.animation.ExitTransition.None
                             }
                         },
                         contentKey = { it },
