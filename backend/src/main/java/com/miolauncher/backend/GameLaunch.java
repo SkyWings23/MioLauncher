@@ -170,19 +170,24 @@ public final class GameLaunch {
     public static int launch(Context context, File gameDir, List<String> rawCommand,
                               int windowW, int windowH, Renderer renderer, LaunchConfig config) throws Exception {
         String versionId = findVersionId(rawCommand);
-        // 按版本所需 Java 主版本选择对应 JRE
+        // 按版本所需 Java 主版本选择对应 JRE（8 / 17 / 21 / 25）
         int javaMajor = 21;
         try {
             DefaultGameRepository repo = new DefaultGameRepository(gameDir.toPath());
             repo.refresh();
             org.jackhuang.hmcl.game.GameInstanceManifest m =
                     repo.getResolvedInstanceManifest(new GameInstanceID(versionId)).launchManifest();
-            if (m.javaVersion() != null && m.javaVersion().majorVersion() > 21) {
-                javaMajor = m.javaVersion().majorVersion();
-            }
+            int mv = m.javaVersion() != null ? m.javaVersion().majorVersion() : 0;
+            if (mv >= 25) javaMajor = 25;       // 26.x 等需要 Java 25
+            else if (mv >= 17) javaMajor = 21;  // 17..24 用 Java 21（更高类文件由 25 处理）
+            else if (mv >= 9) javaMajor = 17;   // 9..16 用 Java 17
+            else if (mv > 0) javaMajor = 8;     // Java 6/8 老版本用 Java 8
+            // mv == 0（无声明）：现代版本默认 21
         } catch (Throwable t) {
             android.util.Log.w("MioGame", "resolve javaMajor failed, use 21", t);
         }
+        // 按需从 assets 解压对应 JRE（jre8/jre17/jre21/jre25）
+        JRE.ensureInstalled(context, javaMajor);
         File jreHome = JRE.getJreHome(context, javaMajor);
         if (jreHome == null) {
             throw new IllegalStateException("JRE " + javaMajor + " 未安装");
@@ -236,38 +241,41 @@ public final class GameLaunch {
         extra.add("-Dorg.lwjgl.freetype.libname=" + context.getApplicationInfo().nativeLibraryDir + "/libfreetype.so");
         extra.add("-Dorg.lwjgl.spvc.libname=spirv-cross-c-shared");
         // FCL 全套 AWT/Cacio 配置（Caciocavallo 纯 Java AWT，替 Android 提供 java.awt）
-        File cacioDir = new File(runtimeDir, "caciocavallo17");
-        File cacioAgent = new File(cacioDir, "cacio-agent.jar");
-        extra.add("-Djava.awt.headless=false");
-        extra.add("-Dcacio.managed.screensize=" + windowW + "x" + windowH);
-        extra.add("-Dcacio.font.fontmanager=sun.awt.X11FontManager");
-        extra.add("-Dcacio.font.fontscaler=sun.font.FreetypeFontScaler");
-        extra.add("-Dswing.defaultlaf=javax.swing.plaf.nimbus.NimbusLookAndFeel");
-        extra.add("-Dawt.toolkit=com.github.caciocavallosilano.cacio.ctc.CTCToolkit");
-        extra.add("-Djava.awt.graphicsenv=com.github.caciocavallosilano.cacio.ctc.CTCGraphicsEnvironment");
-        if (cacioAgent.isFile()) {
-            extra.add("-javaagent:" + cacioAgent.getAbsolutePath());
-            extra.add("-Xbootclasspath/a:" + cacioAgent.getAbsolutePath()
-                    + File.pathSeparator + new File(cacioDir, "cacio-shared-1.19.1-SNAPSHOT.jar").getAbsolutePath()
-                    + File.pathSeparator + new File(cacioDir, "cacio-tta-1.19.1-SNAPSHOT.jar").getAbsolutePath());
+        // Java 8 及更老版本不需要 cacio（用自身 AWT/LWJGL2），且不支持 --add-exports/--add-opens
+        if (javaMajor >= 9) {
+            File cacioDir = new File(runtimeDir, "caciocavallo17");
+            File cacioAgent = new File(cacioDir, "cacio-agent.jar");
+            extra.add("-Djava.awt.headless=false");
+            extra.add("-Dcacio.managed.screensize=" + windowW + "x" + windowH);
+            extra.add("-Dcacio.font.fontmanager=sun.awt.X11FontManager");
+            extra.add("-Dcacio.font.fontscaler=sun.font.FreetypeFontScaler");
+            extra.add("-Dswing.defaultlaf=javax.swing.plaf.nimbus.NimbusLookAndFeel");
+            extra.add("-Dawt.toolkit=com.github.caciocavallosilano.cacio.ctc.CTCToolkit");
+            extra.add("-Djava.awt.graphicsenv=com.github.caciocavallosilano.cacio.ctc.CTCGraphicsEnvironment");
+            if (cacioAgent.isFile()) {
+                extra.add("-javaagent:" + cacioAgent.getAbsolutePath());
+                extra.add("-Xbootclasspath/a:" + cacioAgent.getAbsolutePath()
+                        + File.pathSeparator + new File(cacioDir, "cacio-shared-1.19.1-SNAPSHOT.jar").getAbsolutePath()
+                        + File.pathSeparator + new File(cacioDir, "cacio-tta-1.19.1-SNAPSHOT.jar").getAbsolutePath());
+            }
+            // cacio 需要的 JVM 内部类访问（对齐 FCL 的 add-exports/add-opens）
+            extra.add("--add-exports=java.desktop/java.awt=ALL-UNNAMED");
+            extra.add("--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED");
+            extra.add("--add-exports=java.desktop/sun.awt.image=ALL-UNNAMED");
+            extra.add("--add-exports=java.desktop/sun.java2d=ALL-UNNAMED");
+            extra.add("--add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED");
+            extra.add("--add-exports=java.desktop/sun.awt=ALL-UNNAMED");
+            extra.add("--add-exports=java.desktop/sun.awt.event=ALL-UNNAMED");
+            extra.add("--add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED");
+            extra.add("--add-exports=java.desktop/sun.font=ALL-UNNAMED");
+            extra.add("--add-exports=java.base/sun.security.action=ALL-UNNAMED");
+            extra.add("--add-opens=java.base/java.util=ALL-UNNAMED");
+            extra.add("--add-opens=java.desktop/java.awt=ALL-UNNAMED");
+            extra.add("--add-opens=java.desktop/sun.font=ALL-UNNAMED");
+            extra.add("--add-opens=java.desktop/sun.java2d=ALL-UNNAMED");
+            extra.add("--add-opens=java.base/java.lang.reflect=ALL-UNNAMED");
+            extra.add("--add-opens=java.base/java.net=ALL-UNNAMED");
         }
-        // cacio 需要的 JVM 内部类访问（对齐 FCL 的 add-exports/add-opens）
-        extra.add("--add-exports=java.desktop/java.awt=ALL-UNNAMED");
-        extra.add("--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED");
-        extra.add("--add-exports=java.desktop/sun.awt.image=ALL-UNNAMED");
-        extra.add("--add-exports=java.desktop/sun.java2d=ALL-UNNAMED");
-        extra.add("--add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED");
-        extra.add("--add-exports=java.desktop/sun.awt=ALL-UNNAMED");
-        extra.add("--add-exports=java.desktop/sun.awt.event=ALL-UNNAMED");
-        extra.add("--add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED");
-        extra.add("--add-exports=java.desktop/sun.font=ALL-UNNAMED");
-        extra.add("--add-exports=java.base/sun.security.action=ALL-UNNAMED");
-        extra.add("--add-opens=java.base/java.util=ALL-UNNAMED");
-        extra.add("--add-opens=java.desktop/java.awt=ALL-UNNAMED");
-        extra.add("--add-opens=java.desktop/sun.font=ALL-UNNAMED");
-        extra.add("--add-opens=java.desktop/sun.java2d=ALL-UNNAMED");
-        extra.add("--add-opens=java.base/java.lang.reflect=ALL-UNNAMED");
-        extra.add("--add-opens=java.base/java.net=ALL-UNNAMED");
         extra.add("-Dglfwstub.windowWidth=" + windowW);
         extra.add("-Dglfwstub.windowHeight=" + windowH);
         extra.add("-Dglfwstub.initEgl=false");
@@ -377,9 +385,15 @@ public final class GameLaunch {
             if (arg.startsWith("-Djava.library.path=")) {
                 args.add(extra.get(0));
             } else if ("-cp".equals(arg) && i + 1 < src.size()) {
-                // 用 FCL 的 lwjgl.jar 前置 classpath，覆盖游戏自带 LWJGL
-                args.add(arg);
-                args.add(lwjglJar.getAbsolutePath() + java.io.File.pathSeparator + dedupeClasspath(src.get(i + 1)));
+                // 用 FCL 的 lwjgl.jar 前置 classpath，覆盖游戏自带 LWJGL。
+                // Java 8 老版本（如 Beta 1.0）用 LWJGL 2，前置 LWJGL 3 会冲突，跳过。
+                if (javaMajor >= 9) {
+                    args.add(arg);
+                    args.add(lwjglJar.getAbsolutePath() + java.io.File.pathSeparator + dedupeClasspath(src.get(i + 1)));
+                } else {
+                    args.add(arg);
+                    args.add(dedupeClasspath(src.get(i + 1)));
+                }
                 i++;
             } else {
                 args.add(arg);

@@ -95,6 +95,30 @@ object CrashLogManager {
         context, "crash-${System.currentTimeMillis()}.txt", report.combined,
     )
 
+    /**
+     * 把日志内容写入可分享的文件（外部目录 MioLogs/），返回文件。
+     * 分享用 EXTRA_STREAM + FileProvider 走完整文件，避免 EXTRA_TEXT 截断。
+     */
+    fun shareFile(context: Context, fileName: String, content: String): File? =
+        exportText(context, fileName, content)
+
+    /** 构造分享 Intent（完整日志文件），返回 null 表示写入失败 */
+    fun shareIntent(context: Context, title: String, fileName: String, content: String): android.content.Intent? {
+        val f = shareFile(context, fileName, content) ?: return null
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            context.packageName + ".fileprovider",
+            f,
+        )
+        return android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(android.content.Intent.EXTRA_SUBJECT, title)
+            putExtra(android.content.Intent.EXTRA_TEXT, title + "（完整日志见附件）")
+            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+    }
+
     // ---- 启动标记机制：异常退出（含 native 崩溃/被系统杀）也能检测 ----
 
     /** 启动标记文件（游戏目录下；正常退出会删除，残留=异常崩溃） */

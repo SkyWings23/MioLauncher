@@ -462,10 +462,13 @@ fun VirtualControlsScreen(onBack: () -> Unit) {
                                                 }
                                                 if (dragging) {
                                                     change.consume()
-                                                    e.x = (e.x + change.positionChange().x)
-                                                        .coerceIn(halfPx, previewW - halfPx)
-                                                    e.y = (e.y + change.positionChange().y)
-                                                        .coerceIn(halfPx, previewH - halfPx)
+                                                    val maxX = previewW - halfPx
+                                                    val maxY = previewH - halfPx
+                                                    // 预览区比控件还小时范围会反转，coerceIn 会抛异常，故先守卫
+                                                    if (maxX >= halfPx)
+                                                        e.x = (e.x + change.positionChange().x).coerceIn(halfPx, maxX)
+                                                    if (maxY >= halfPx)
+                                                        e.y = (e.y + change.positionChange().y).coerceIn(halfPx, maxY)
                                                 }
                                             }
                                         }

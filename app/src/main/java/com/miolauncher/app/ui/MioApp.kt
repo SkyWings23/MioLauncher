@@ -444,10 +444,23 @@ private fun CrashLogDialog(
                 ) { Text("复制") }
                 androidx.compose.material3.TextButton(
                     onClick = {
+                        // 分享完整日志文件，避免大文本截断
+                        val f = com.miolauncher.app.data.CrashLogManager.shareFile(
+                            context, "crash-${System.currentTimeMillis()}.txt", report.combined,
+                        )
+                        if (f == null) {
+                            Toast.makeText(context, "生成分享文件失败", Toast.LENGTH_SHORT).show()
+                            return@TextButton
+                        }
+                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                            context, context.packageName + ".fileprovider", f,
+                        )
                         val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                             type = "text/plain"
                             putExtra(android.content.Intent.EXTRA_SUBJECT, report.title)
-                            putExtra(android.content.Intent.EXTRA_TEXT, report.combined)
+                            putExtra(android.content.Intent.EXTRA_TEXT, report.title + "（完整日志见附件）")
+                            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
                         runCatching { context.startActivity(android.content.Intent.createChooser(send, "分享崩溃日志")) }
                             .onFailure { Toast.makeText(context, "没有可用的分享应用", Toast.LENGTH_SHORT).show() }

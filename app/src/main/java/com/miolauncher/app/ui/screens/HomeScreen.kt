@@ -84,7 +84,7 @@ fun HomeScreen(
             try {
                 val repo = MioRepository(context)
                 installedVersions = repo.loadInstalledVersions()
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {}  // 用 Throwable：HMCL 库可能抛 Error（VerifyError 等），Exception 捕获不到
         }
         loading = false
     }

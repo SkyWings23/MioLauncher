@@ -56,11 +56,14 @@ public final class JRE {
 
     public static boolean isInstalled(Context context, int javaMajor) {
         File jre = jreDir(context, javaMajor);
-        // 同时校验 libjvm.so 与核心模块镜像 lib/modules（缺 modules 会 JVM 无法启动：
-        // "Failed setting boot class path"）。任一缺失视为未安装，触发重新解压。
-        return jre.isDirectory()
-                && new File(jre, "lib/server/libjvm.so").exists()
-                && new File(jre, "lib/modules").exists();
+        if (!jre.isDirectory() || !new File(jre, "lib/server/libjvm.so").exists()) return false;
+        // Java 9+ 有 lib/modules；Java 8 用 lib/rt.jar（可能被 pack 为 .pack）
+        if (javaMajor >= 9) {
+            return new File(jre, "lib/modules").exists();
+        } else {
+            return new File(jre, "lib/rt.jar").exists()
+                    || new File(jre, "lib/rt.jar.pack").exists();
+        }
     }
 
     /**
@@ -184,6 +187,9 @@ public final class JRE {
         // 设置执行权限（assets 解压后默认无 exec 位）
         setExecutable(tmp);
 
+        // Java 8 JRE 的 jar 以 .pack 压缩格式分发，需用 libunpack200.so 解包为 .jar
+        unpackPackedJars(context, tmp);
+
         File old = new File(context.getFilesDir(), "mio/jre" + javaMajor + ".old");
         deleteRecursively(old);
         if (jreHome.exists()) {
@@ -200,8 +206,33 @@ public final class JRE {
         deleteRecursively(old);
     }
 
-    private static void setExecutable(File dir) {
-        File[] files = dir.listFiles();
+    /**
+     * Java 8 JRE 的 lib/*.jar.pack 需要 unpack200 解包为 .jar 才能使用。
+     * 使用 APK 内置的 libunpack200.so（与 FCL 相同方式）。
+     */
+    private static void unpackPackedJars(Context context, File jreDir) {
+        File unpack = new File(context.getApplicationInfo().nativeLibraryDir, "libunpack200.so");
+        if (!unpack.isFile()) return;
+        File lib = new File(jreDir, "lib");
+        File[] packs = lib.listFiles((d, name) -> name.endsWith(".pack"));
+        if (packs == null) return;
+        for (File pack : packs) {
+            String jarPath = pack.getAbsolutePath().replace(".pack", "");
+            try {
+                java.lang.Process p = new ProcessBuilder("./libunpack200.so", "-r",
+                        pack.getAbsolutePath(), jarPath)
+                        .directory(new File(context.getApplicationInfo().nativeLibraryDir))
+                        .redirectErrorStream(true)
+                        .start();
+                p.waitFor();
+                android.util.Log.i("MioJRE", "unpacked " + pack.getName());
+            } catch (Exception e) {
+                android.util.Log.w("MioJRE", "unpack200 failed for " + pack.getName(), e);
+            }
+        }
+    }
+
+    private static void setExecutable(File dir) {        File[] files = dir.listFiles();
         if (files == null) return;
         for (File f : files) {
             if (f.isDirectory()) {

@@ -26,7 +26,13 @@ import java.util.stream.Stream;
  * @author Glavo
  */
 final class CallerFinder {
-    private static final String PACKAGE_PREFIX = CallerFinder.class.getPackageName() + ".";
+    private static final String PACKAGE_PREFIX;
+    static {
+        // Class.getPackageName() 需要 API 34，手动从 getName() 截取兼容所有版本
+        String name = CallerFinder.class.getName();
+        int dot = name.lastIndexOf('.');
+        PACKAGE_PREFIX = dot >= 0 ? name.substring(0, dot + 1) : "";
+    }
 
     static String getCaller() {
         StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();

@@ -51,7 +51,7 @@ class VersionListViewModel : ViewModel() {
             try {
                 _versions.value = repository.loadVersions()
                 loaded = true
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 _error.value = e.message ?: "加载版本失败"
             } finally {
                 _loading.value = false
@@ -126,7 +126,7 @@ class VersionListViewModel : ViewModel() {
                 _versions.value = _versions.value.map {
                     if (it.id == versionId) it.copy(isDownloaded = true) else it
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 _installProgress.update {
                     it?.copy(isDone = true, error = e.message, currentStage = "安装失败")
                 }

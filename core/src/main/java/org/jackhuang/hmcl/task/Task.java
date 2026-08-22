@@ -381,7 +381,16 @@ public abstract class Task<T> {
     protected void updateProgressImmediately(double progress) {
         // assert progress >= 0 && progress <= 1.0;
         if ((double) PENDING_PROGRESS_HANDLE.getAndSet(this, progress) == -1.0) {
-            Platform.runLater(() -> this.progress.set((double) PENDING_PROGRESS_HANDLE.getAndSet(this, -1.0)));
+            // 不能用 lambda（D8 对 "捕获 this + VarHandle" 的组合生成无效字节码，导致
+            // VerifyError: register v4 has type Task but expected Object[]）。
+            // 改用匿名类绕过 D8 的 invokedynamic 去糖。
+            final Task<?> self = this;
+            Platform.runLater(new Runnable() {
+                @Override
+                public void run() {
+                    self.progress.set((double) PENDING_PROGRESS_HANDLE.getAndSet(self, -1.0));
+                }
+            });
         }
     }
 
@@ -1082,7 +1091,13 @@ public abstract class Task<T> {
         void execute(T result, Exception exception) throws Exception;
     }
 
-    private static final String PACKAGE_PREFIX = Task.class.getPackageName() + ".";
+    private static final String PACKAGE_PREFIX;
+    static {
+        // Class.getPackageName() 需要 API 34，手动从 getName() 截取兼容所有版本
+        String name = Task.class.getName();
+        int dot = name.lastIndexOf('.');
+        PACKAGE_PREFIX = dot >= 0 ? name.substring(0, dot + 1) : "";
+    }
 
     private static String getCaller() {
         StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();

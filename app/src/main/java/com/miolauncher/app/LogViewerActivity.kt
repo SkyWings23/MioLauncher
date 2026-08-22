@@ -47,15 +47,18 @@ import com.miolauncher.app.ui.theme.MioLauncherTheme
 
 /**
  * 日志查看页：显示日志内容，支持 复制 / 分享 / 导出。
- * Intent 参数：title、content、exportName（可选）。
+ * 日志内容通过文件传递（Intent extra 有 ~1MB Binder 限制，大日志会截断/崩溃）。
  */
 class LogViewerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val title = intent.getStringExtra("title") ?: "日志"
-        val content = intent.getStringExtra("content") ?: ""
         val exportName = intent.getStringExtra("export_name") ?: "mio-log.txt"
+        // 从文件读取内容（避免 Intent 传大文本的 Binder 限制）
+        val content = intent.getStringExtra("file_path")?.let { p ->
+            runCatching { java.io.File(p).readText() }.getOrNull()
+        } ?: intent.getStringExtra("content") ?: ""
         setContent {
             MioLauncherTheme {
                 LogViewerScreen(title = title, content = content, exportName = exportName, onBack = { finish() })
@@ -64,11 +67,25 @@ class LogViewerActivity : ComponentActivity() {
     }
 
     companion object {
+        /**
+         * 打开日志查看页。内容先写入缓存文件再传路径，避免 Intent 传大文本
+         * 触发 TransactionTooLargeException 或截断。
+         */
         fun start(context: Context, title: String, content: String, exportName: String) {
+            val file = try {
+                java.io.File(context.cacheDir, "logview_${System.currentTimeMillis()}.txt").apply {
+                    writeText(content)
+                }
+            } catch (_: Exception) {
+                null
+            }
             val i = Intent(context, LogViewerActivity::class.java)
                 .putExtra("title", title)
-                .putExtra("content", content)
                 .putExtra("export_name", exportName)
+                .apply {
+                    if (file != null) putExtra("file_path", file.absolutePath)
+                    else putExtra("content", content)
+                }
             if (context !is android.app.Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(i)
         }
@@ -92,15 +109,16 @@ private fun LogViewerScreen(
     }
 
     fun share() {
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, title)
-            putExtra(Intent.EXTRA_TEXT, content)
-        }
-        runCatching {
-            context.startActivity(Intent.createChooser(send, "分享日志"))
-        }.onFailure {
-            Toast.makeText(context, "没有可用的分享应用", Toast.LENGTH_SHORT).show()
+        // 分享完整日志文件（EXTRA_STREAM），避免 EXTRA_TEXT 大文本被截断
+        val send = com.miolauncher.app.data.CrashLogManager.shareIntent(context, title, exportName, content)
+        if (send != null) {
+            runCatching {
+                context.startActivity(Intent.createChooser(send, "分享日志"))
+            }.onFailure {
+                Toast.makeText(context, "没有可用的分享应用", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "生成分享文件失败", Toast.LENGTH_SHORT).show()
         }
     }
 

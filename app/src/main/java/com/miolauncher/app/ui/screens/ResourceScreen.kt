@@ -195,7 +195,7 @@ private fun InstalledVersionList() {
                 try {
                     val repo = MioRepository(context)
                     versions = repo.loadInstalledVersions()
-                } catch (_: Exception) {}
+                } catch (_: Throwable) {}
             }
             loading = false
         }
