@@ -45,20 +45,30 @@ class MioRepository(private val context: Context) {
         // 先读磁盘缓存（秒开，不阻塞显示）
         readVersionsCache(allowStale = true)?.let { return@withContext it }
 
-        val task = gameVersionList.loadAsync("")
-        val executor = task.executor()
-        val success = executor.test()
-        if (!success) {
-            val ex = executor.exception
-            android.util.Log.e("MioRepo", "版本加载失败", ex)
-            throw Exception(ex?.message ?: "版本加载失败", ex)
-        }
+        // 无缓存：网络加载，但加总超时（20s），避免网络慢时无限卡"正在加载"
+        try {
+            kotlinx.coroutines.withTimeout(20_000) {
+                val task = gameVersionList.loadAsync("")
+                val executor = task.executor()
+                val success = executor.test()
+                if (!success) {
+                    val ex = executor.exception
+                    android.util.Log.e("MioRepo", "版本加载失败", ex)
+                    throw Exception(ex?.message ?: "版本加载失败", ex)
+                }
 
-        val result = gameVersionList.getVersions("").map { remote ->
-            remote.toGameVersion()
-        }.sortedByDescending { it.releaseTime }
-        writeVersionsCache(result)
-        result
+                val result = gameVersionList.getVersions("").map { remote ->
+                    remote.toGameVersion()
+                }.sortedByDescending { it.releaseTime }
+                writeVersionsCache(result)
+                result
+            }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            android.util.Log.w("MioRepo", "版本列表加载超时，返回空")
+            throw Exception("版本列表加载超时，请检查网络", e)
+        } catch (e: Exception) {
+            throw e
+        }
     }
 
     /** 只读缓存（可能过期），无缓存返回 null */
