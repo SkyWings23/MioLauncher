@@ -29,10 +29,11 @@ object DeviceInfo {
     fun safeGameMemoryMb(context: Context): Int {
         val total = totalMemoryMb(context)
         return when {
-            total < 2048 -> 768
-            total < 4096 -> 1536
-            total < 8192 -> 3072
-            else -> 6144
+            total < 2048 -> 512
+            total < 3072 -> 768
+            total < 4096 -> 1024
+            total < 8192 -> 2048
+            else -> 3072
         }
     }
 

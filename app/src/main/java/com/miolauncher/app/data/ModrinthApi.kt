@@ -146,34 +146,68 @@ object ModrinthApi {
     }
 
     private fun getJson(url: String): JsonObject? {
-        // 依次尝试：镜像 → 官方，任一成功即返回
-        var result: JsonObject? = null
-        for (base in API_BASES) {
-            val u = withBase(url, base)
-            result = request(u)
-            if (result != null) return result
-        }
-        return result
+        // 并发请求镜像+官方，取先成功的（网络差时快速返回）
+        return race(url) { u, c -> request(u, c) }
     }
 
     private fun getJsonArray(url: String): JsonArray? {
-        // 依次尝试：镜像 → 官方，任一成功即返回
-        var result: JsonArray? = null
-        for (base in API_BASES) {
-            val u = withBase(url, base)
-            result = requestArray(u)
-            if (result != null) return result
-        }
-        return result
+        return raceArray(url)
     }
 
-    private fun request(url: String): JsonObject? {
-        val conn = URL(url).openConnection() as HttpURLConnection
+    private fun race(url: String, req: (String, java.net.HttpURLConnection) -> JsonObject?): JsonObject? {
+        val urls = API_BASES.map { withBase(url, it) }
+        val exec = java.util.concurrent.Executors.newFixedThreadPool(urls.size)
         try {
-            conn.connectTimeout = 10000
-            conn.readTimeout = 15000
+            val futures = urls.map { u ->
+                exec.submit(
+                    java.util.concurrent.Callable<JsonObject?> {
+                        req(u, URL(u).openConnection() as java.net.HttpURLConnection)
+                    }
+                )
+            }
+            for (f in futures) {
+                try {
+                    val r = f.get(12, java.util.concurrent.TimeUnit.SECONDS)
+                    if (r != null) return r
+                } catch (e: Exception) {
+                }
+            }
+            return null
+        } finally {
+            exec.shutdownNow()
+        }
+    }
+
+    private fun raceArray(url: String): JsonArray? {
+        val urls = API_BASES.map { withBase(url, it) }
+        val exec = java.util.concurrent.Executors.newFixedThreadPool(urls.size)
+        try {
+            val futures = urls.map { u ->
+                exec.submit(
+                    java.util.concurrent.Callable<JsonArray?> {
+                        requestArray(u, URL(u).openConnection() as java.net.HttpURLConnection)
+                    }
+                )
+            }
+            for (f in futures) {
+                try {
+                    val r = f.get(12, java.util.concurrent.TimeUnit.SECONDS)
+                    if (r != null) return r
+                } catch (e: Exception) {
+                }
+            }
+            return null
+        } finally {
+            exec.shutdownNow()
+        }
+    }
+
+    private fun request(url: String, conn: java.net.HttpURLConnection): JsonObject? {
+        try {
+            conn.connectTimeout = 8000
+            conn.readTimeout = 10000
             conn.requestMethod = "GET"
-            conn.setRequestProperty("User-Agent", "MioLauncher/0.1.0")
+            conn.setRequestProperty("User-Agent", "MioLauncher/0.1.3")
             if (conn.responseCode !in 200..299) return null
             return JsonParser.parseString(conn.inputStream.bufferedReader().use { it.readText() }).asJsonObject
         } catch (e: Exception) {
@@ -183,13 +217,12 @@ object ModrinthApi {
         }
     }
 
-    private fun requestArray(url: String): JsonArray? {
-        val conn = URL(url).openConnection() as HttpURLConnection
+    private fun requestArray(url: String, conn: java.net.HttpURLConnection): JsonArray? {
         try {
-            conn.connectTimeout = 10000
-            conn.readTimeout = 15000
+            conn.connectTimeout = 8000
+            conn.readTimeout = 10000
             conn.requestMethod = "GET"
-            conn.setRequestProperty("User-Agent", "MioLauncher/0.1.0")
+            conn.setRequestProperty("User-Agent", "MioLauncher/0.1.3")
             if (conn.responseCode !in 200..299) return null
             return JsonParser.parseString(conn.inputStream.bufferedReader().use { it.readText() }).asJsonArray
         } catch (e: Exception) {
@@ -198,6 +231,7 @@ object ModrinthApi {
             conn.disconnect()
         }
     }
+
 
     /**
      * 获取项目最新且兼容指定游戏版本 / 加载器的文件。
