@@ -214,11 +214,11 @@ public final class GameLaunch {
         File mioLibPatcher = new File(runtimeDir, "MioLibPatcher.jar");
         File mioExitAgent = new File(runtimeDir, "MioExitAgent.jar");
 
-        // cacio 的 Toolkit.loadLibraries 需要 libawt_xawt.so（Pojav stub），
+        // cacio 的 Toolkit.loadLibraries 需要 libawt_xawt.so（Pojav stub）。
         // bionic JVM 只从 sun.boot.library.path（jreHome/lib）加载 java.desktop 原生库。
-        // 与 JRE 自带的 libawt.so/libawt_headless.so 放一起，缺失则从 nativeLibraryDir 补齐。
+        // JRE 自带 libawt.so/libawt_headless.so/libawt_xawt.so 时直接用；缺失才从 nativeLibraryDir 补齐。
         File awtXawt = new File(jreHome, "lib/libawt_xawt.so");
-        {
+        if (!awtXawt.isFile()) {
             File awtSrc = new File(context.getApplicationInfo().nativeLibraryDir, "libawt_xawt.so");
             if (awtSrc.isFile()) {
                 try (java.io.FileInputStream in = new java.io.FileInputStream(awtSrc);
@@ -230,6 +230,24 @@ public final class GameLaunch {
                 android.util.Log.i("MioGame", "copied libawt_xawt.so to jre lib: " + awtXawt.getAbsolutePath());
             } else {
                 android.util.Log.w("MioGame", "libawt_xawt.so not found in nativeLibraryDir");
+            }
+        }
+
+        // Java 25 的 libfontmanager.so 依赖 libc++_shared.so，但 JRE 资产未内置。
+        // 从 app nativeLib 补齐，否则 java.awt.Font.initIDs() 报 UnsatisfiedLinkError。
+        File cppShared = new File(jreHome, "lib/libc++_shared.so");
+        if (!cppShared.isFile()) {
+            File cppSrc = new File(context.getApplicationInfo().nativeLibraryDir, "libc++_shared.so");
+            if (cppSrc.isFile()) {
+                try (java.io.FileInputStream in = new java.io.FileInputStream(cppSrc);
+                     java.io.FileOutputStream out = new java.io.FileOutputStream(cppShared)) {
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                }
+                android.util.Log.i("MioGame", "copied libc++_shared.so to jre lib: " + cppShared.getAbsolutePath());
+            } else {
+                android.util.Log.w("MioGame", "libc++_shared.so not found in nativeLibraryDir");
             }
         }
 
@@ -262,8 +280,10 @@ public final class GameLaunch {
         extra.add("-Dorg.lwjgl.freetype.libname=" + context.getApplicationInfo().nativeLibraryDir + "/libfreetype.so");
         extra.add("-Dorg.lwjgl.spvc.libname=spirv-cross-c-shared");
         // FCL 全套 AWT/Cacio 配置（Caciocavallo 纯 Java AWT，替 Android 提供 java.awt）
-        // Java 8 及更老版本不需要 cacio（用自身 AWT/LWJGL2），且不支持 --add-exports/--add-opens
-        if (javaMajor >= 9) {
+        // Java 8 及更老版本不需要 cacio（用自身 AWT/LWJGL2），且不支持 --add-exports/--add-opens。
+        // Java 25+：cacio 的 AWT 依赖 libfontmanager 等，在 jre25 上加载失败（bionic namespace），
+        // 且 26.x 现代版本用 LWJGL 渲染不依赖 java.awt，故跳过 cacio。
+        if (javaMajor >= 9 && javaMajor < 25) {
             File cacioDir = new File(runtimeDir, "caciocavallo17");
             File cacioAgent = new File(cacioDir, "cacio-agent.jar");
             extra.add("-Djava.awt.headless=false");

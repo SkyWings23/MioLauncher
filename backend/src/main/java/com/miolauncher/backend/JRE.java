@@ -446,7 +446,12 @@ public final class JRE {
 
     private static void preload(String path) {
         boolean ok = net.kdt.pojavlaunch.utils.JREUtils.dlopen(path);
-        System.out.println("MioJRE: preload " + path + " -> " + ok);
+        if (!ok) {
+            // dlopen 失败：记录文件是否存在及 dlerror（JREUtils 会打印 dlerror）
+            System.out.println("MioJRE: preload " + path + " -> false");
+        } else {
+            System.out.println("MioJRE: preload " + path + " -> true");
+        }
     }
 
     private static String ldLibraryPath(File jreHome, int javaMajor) {
