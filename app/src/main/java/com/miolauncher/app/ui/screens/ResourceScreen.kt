@@ -319,24 +319,23 @@ private fun LocalResourceList(
         scope.launch {
             withContext(Dispatchers.IO) {
                 val list = mutableListOf<Pair<com.miolauncher.app.data.ModManager.Source, String>>()
+                // 列出目录（解压导入的整合包/光影/地图）与文件，整合包等以独立目录形式存在
+                fun scan(dir: java.io.File, source: com.miolauncher.app.data.ModManager.Source) {
+                    val entries = dir.listFiles() ?: return
+                    entries.forEach { f ->
+                        if (f.isDirectory || f.isFile) {
+                            list.add(source to f.name + if (f.isDirectory) "/" else "")
+                        }
+                    }
+                }
                 if (versionId != null) {
                     val inst = com.miolauncher.app.data.VersionConfigStore.getInstanceDir(context, versionId)
                     if (inst != null) {
                         isolated = true
-                        val instDir = File(inst, type.dirName)
-                        if (instDir.isDirectory) {
-                            instDir.listFiles { f -> f.isFile }?.forEach { f ->
-                                list.add(com.miolauncher.app.data.ModManager.Source.ISOLATED to f.name)
-                            }
-                        }
+                        scan(File(inst, type.dirName), com.miolauncher.app.data.ModManager.Source.ISOLATED)
                     }
                 }
-                val globalDir = File(com.miolauncher.app.data.MioRepository(context).gameDir, type.dirName)
-                if (globalDir.isDirectory) {
-                    globalDir.listFiles { f -> f.isFile }?.forEach { f ->
-                        list.add(com.miolauncher.app.data.ModManager.Source.GLOBAL to f.name)
-                    }
-                }
+                scan(File(com.miolauncher.app.data.MioRepository(context).gameDir, type.dirName), com.miolauncher.app.data.ModManager.Source.GLOBAL)
                 items = list.sortedWith(compareBy({ it.first == com.miolauncher.app.data.ModManager.Source.ISOLATED }, { it.second.lowercase() }))
             }
         }
@@ -372,7 +371,12 @@ private fun LocalResourceList(
         }
     }
 
-    val shown = items.filter { if (filterAll) true else it.first == com.miolauncher.app.data.ModManager.Source.GLOBAL || isolated }
+    // "可用/全部"：模组按隔离语义过滤；光影/地图/整合包无兼容性概念，"可用"即全部
+    val shown = if (type == com.miolauncher.app.data.ResourceInstaller.Type.MOD) {
+        items.filter { if (filterAll) true else it.first == com.miolauncher.app.data.ModManager.Source.GLOBAL || isolated }
+    } else {
+        items
+    }
 
     Column(Modifier.fillMaxSize()) {
         // 筛选：可用 / 全部
@@ -478,12 +482,15 @@ private fun LocalResourceList(
                     deleteTarget = null
                     scope.launch {
                         withContext(Dispatchers.IO) {
-                            if (source == com.miolauncher.app.data.ModManager.Source.ISOLATED) {
+                            // 目录（整合包/光影解压）递归删除；文件直接删
+                            val cleanName = name.removeSuffix("/")
+                            val target = if (source == com.miolauncher.app.data.ModManager.Source.ISOLATED) {
                                 val inst = com.miolauncher.app.data.VersionConfigStore.getInstanceDir(context, versionId!!)
-                                File(inst, "${type.dirName}/$name").delete()
+                                File(inst, "${type.dirName}/$cleanName")
                             } else {
-                                com.miolauncher.app.data.ResourceInstaller.delete(context, type, name)
+                                com.miolauncher.app.data.ResourceInstaller.resolve(context, type, cleanName)
                             }
+                            if (target.isDirectory) target.deleteRecursively() else target.delete()
                         }
                         reload()
                     }

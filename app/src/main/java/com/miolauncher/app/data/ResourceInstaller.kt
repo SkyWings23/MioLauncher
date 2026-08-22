@@ -51,6 +51,10 @@ object ResourceInstaller {
         File(targetDir(context, type, versionId), fileName).delete()
     }
 
+    /** 返回目标目录下指定文件/目录的路径（全局） */
+    fun resolve(context: Context, type: Type, name: String): File =
+        File(targetDir(context, type), name)
+
     /** 写入一个本地资源文件（自定义导入用），返回目标文件 */
     fun writeFile(context: Context, type: Type, versionId: String?, name: String, bytes: ByteArray): File? {
         return try {

@@ -113,6 +113,8 @@ class MioRepository(private val context: Context) {
         loader: McLoader = McLoader.NONE,
         onStage: (String, Float) -> Unit = { _, _ -> },
         onItem: (String, Float, Boolean) -> Unit = { _, _, _ -> },
+        onTaskCount: (Int) -> Unit = {},  // 预知下载任务总数（按 Task 身份去重）
+        onTaskDone: () -> Unit = {},      // 一个下载任务完成
     ) = withContext(Dispatchers.IO) {
         val builder = DefaultGameBuilder(dependencyManager)
             .gameVersion(versionId)
@@ -134,8 +136,14 @@ class MioRepository(private val context: Context) {
 
         val task = builder.buildAsync()
 
+        // 用 Task 身份去重统计下载任务总数，避免 HMCL 的 Task 名不唯一导致的计数膨胀
+        val seenTasks = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<org.jackhuang.hmcl.task.Task<*>, Boolean>())
+
         val executor = task.executor(object : org.jackhuang.hmcl.task.TaskListener() {
             override fun onRunning(task: org.jackhuang.hmcl.task.Task<*>) {
+                if (seenTasks.add(task)) {
+                    onTaskCount(seenTasks.size)
+                }
                 val stage = task.getInheritedStage()?.takeIf { it.isNotBlank() } ?: task.getName() ?: "任务进行中"
                 val p = task.progressProperty().get().toFloat()
                 if (p in 0.0..1.0) {
@@ -147,6 +155,7 @@ class MioRepository(private val context: Context) {
             }
 
             override fun onFinished(task: org.jackhuang.hmcl.task.Task<*>) {
+                onTaskDone()
                 onItem(task.getName() ?: "任务完成", 1f, true)
             }
         })

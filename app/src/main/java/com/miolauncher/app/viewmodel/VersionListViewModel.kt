@@ -65,9 +65,10 @@ class VersionListViewModel : ViewModel() {
     fun installVersion(versionId: String, loader: McLoader) {
         if (_installProgress.value != null) return
         val taskId = "version-$versionId-${loader.id}"
-        val fileNames = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-        val doneNames = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         DownloadManager.start(taskId, "版本 $versionId · ${loader.label}", filesTotal = 1)
+        // 版本清单 size 作为估算总大小（显示"已下载 X GB / 共 Y GB"）
+        val estSize = _versions.value.firstOrNull { it.id == versionId }?.size
+        if (estSize != null && estSize > 0) DownloadManager.setEstimatedTotal(taskId, estSize)
         installJob = viewModelScope.launch {
             _installProgress.value = InstallProgress(versionId = versionId, loader = loader)
             _installMessage.value = null
@@ -76,9 +77,24 @@ class VersionListViewModel : ViewModel() {
                     versionId = versionId,
                     loader = loader,
                     onStage = { stage, progress ->
-                        _installProgress.update { it?.copy(currentStage = stage, overallProgress = progress) }
+                        // 整体进度 = (已完成任务 + 当前任务进度) / 任务总数，跨阶段单调不倒退
+                        val taskCount = DownloadManager.task(taskId)?.filesTotal ?: 1
+                        val done = DownloadManager.task(taskId)?.filesDone ?: 0
+                        val overall = ((done + progress.coerceIn(0f, 1f)) / taskCount.coerceAtLeast(1))
+                            .coerceIn(0f, 1f)
+                        _installProgress.update { it?.copy(currentStage = stage, overallProgress = overall) }
                         DownloadManager.setStage(taskId, stage)
-                        DownloadManager.setProgress(taskId, progress)
+                        DownloadManager.setProgress(taskId, overall)
+                        // 版本安装按估算总大小显示字节进度（用户可见"已下载 X GB / 共 Y GB"）
+                        DownloadManager.setByteProgress(taskId, overall)
+                    },
+                    onTaskCount = { total ->
+                        // 按 Task 身份去重的下载任务总数（单调增长，不再倒退）
+                        DownloadManager.setFilesTotal(taskId, total)
+                    },
+                    onTaskDone = {
+                        // 完成一个下载任务（对应 onFinished）
+                        DownloadManager.fileDone(taskId)
                     },
                     onItem = { name, fileProgress, done ->
                         _installProgress.update { p ->
@@ -100,18 +116,6 @@ class VersionListViewModel : ViewModel() {
                                 it.copy(items = items)
                             }
                         }
-                        // 用去重文件名统计总文件数；已完成文件数用去重集合精确统计
-                        if (fileNames.add(name)) {
-                            DownloadManager.setFilesTotal(taskId, fileNames.size)
-                        }
-                        if (done && doneNames.add(name)) {
-                            DownloadManager.fileDone(taskId)
-                        }
-                        // 以「已完成文件 / 总文件」作为整体进度（比 HMCL 各阶段 progress 更稳定真实）
-                        val overall = if (fileNames.isEmpty()) fileProgress
-                        else doneNames.size.toFloat() / fileNames.size.coerceAtLeast(1)
-                        _installProgress.update { it?.copy(overallProgress = overall.coerceIn(0f, 1f)) }
-                        DownloadManager.setProgress(taskId, overall.coerceIn(0f, 1f))
                     },
                 )
                 _installProgress.update { it?.copy(isDone = true, currentStage = "安装完成", overallProgress = 1f) }

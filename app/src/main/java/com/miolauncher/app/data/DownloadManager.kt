@@ -165,6 +165,43 @@ object DownloadManager {
         }
     }
 
+    /** 版本安装的估算字节模式：设置预估总大小（如版本清单 size），此后 UI 按字节显示 */
+    fun setEstimatedTotal(id: String, totalBytes: Long) {
+        _tasks.update {
+            it[id]?.let { t -> it + (id to t.copy(total = totalBytes.coerceAtLeast(0))) } ?: it
+        }
+    }
+
+    /** 版本安装的估算字节进度：fraction 0..1 → downloaded = fraction × total（估算显示用） */
+    fun setByteProgress(id: String, fraction: Float) {
+        val now = System.currentTimeMillis()
+        var speed = 0f
+        synchronized(speedState) {
+            val st = speedState[id]
+            if (st != null) {
+                val dt = now - st[1]
+                if (dt > 400) {
+                    val pctDelta = fraction - st[0] / 1000f
+                    speed = pctDelta * 1000f / dt
+                    st[0] = (fraction * 1000f).toLong()
+                    st[1] = now
+                }
+            } else {
+                speedState[id] = longArrayOf((fraction * 1000f).toLong(), now)
+            }
+        }
+        _tasks.update {
+            it[id]?.let { t ->
+                val downloaded = (t.total * fraction.coerceIn(0f, 1f)).toLong()
+                it + (id to t.copy(
+                    downloaded = downloaded,
+                    percent = fraction.coerceIn(0f, 1f),
+                    speed = speed,
+                ))
+            } ?: it
+        }
+    }
+
     /** 更新当前文件与阶段文案 */
     fun setStage(id: String, stage: String) {
         _tasks.update {
