@@ -284,7 +284,7 @@ public final class JRE {
         if (jreHome == null) {
             throw new IllegalStateException("JRE " + javaMajor + " 未安装，请先下载 Java 运行时");
         }
-        setEnvironment(jreHome, context.getApplicationInfo().nativeLibraryDir, renderer, vsync, javaMajor);
+        setEnvironment(jreHome, context, context.getApplicationInfo().nativeLibraryDir, renderer, vsync, javaMajor);
 
         System.loadLibrary("pojavexec");
         net.kdt.pojavlaunch.utils.JREUtils.setDalvikJavaVM();
@@ -485,7 +485,7 @@ public final class JRE {
     /**
      * 设置 JVM 运行所需的环境变量：JAVA_HOME / LD_LIBRARY_PATH / PATH / 渲染后端。
      */
-    private static void setEnvironment(File jreHome, String nativeDir, Renderer renderer, boolean vsync, int javaMajor) throws Exception {
+    private static void setEnvironment(File jreHome, android.content.Context context, String nativeDir, Renderer renderer, boolean vsync, int javaMajor) throws Exception {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             throw new IllegalStateException("需要 Android 8.0+");
         }
@@ -505,6 +505,25 @@ public final class JRE {
         Os.setenv("POJAV_RENDERER", renderer.getGlEsVersion() >= 3 ? "opengles3" : "opengles2", true);
         Os.setenv("POJAVEXEC_EGL", renderer.getEglLibName(), true);
         Os.setenv("FORCE_VSYNC", vsync ? "true" : "false", true);
+
+        // MobileGlues：需 MG_DIR_PATH（含 config.json）+ EGL 由 libmobileglues.so 提供
+        if (renderer.isMobileGlues()) {
+            File mgDir = new File(context.getFilesDir(), "mio/MobileGlues");
+            mgDir.mkdirs();
+            File mgConfig = new File(mgDir, "config.json");
+            if (!mgConfig.isFile()) {
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(mgConfig)) {
+                    String cfg =
+                        "{\"enableANGLE\":0,\"enableNoError\":0,\"fsr1Setting\":0," +
+                        "\"enableExtComputeShader\":0,\"angleDepthClearFixMode\":0," +
+                        "\"enableExtTimerQuery\":0,\"enableExtDirectStateAccess\":0," +
+                        "\"multidrawMode\":0,\"maxGlslCacheSize\":128}";
+                    fos.write(cfg.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                } catch (Throwable ignored) {
+                }
+            }
+            Os.setenv("MG_DIR_PATH", mgDir.getAbsolutePath(), true);
+        }
 
         if (renderer.isGl4es()) {
             // gl4es 家族（NGGL4ES / GL4ES）：GL → GLES 翻译

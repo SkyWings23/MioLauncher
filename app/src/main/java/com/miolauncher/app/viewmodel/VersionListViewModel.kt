@@ -8,8 +8,10 @@ import com.miolauncher.app.data.GameVersion
 import com.miolauncher.app.data.InstallProgress
 import com.miolauncher.app.data.McLoader
 import com.miolauncher.app.data.MioRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -46,13 +48,20 @@ class VersionListViewModel : ViewModel() {
 
     fun refresh() {
         viewModelScope.launch {
+            // 阶段1：立即显示缓存（含过期缓存，保证有列表可看）
+            val cached = withContext(Dispatchers.IO) { repository.loadVersionsCached() }
+            if (cached != null) {
+                _versions.value = cached
+                loaded = true
+            }
             _loading.value = true
             _error.value = null
             try {
+                // 阶段2：网络刷新（成功更新缓存，失败静默保留旧列表）
                 _versions.value = repository.loadVersions()
                 loaded = true
             } catch (e: Throwable) {
-                _error.value = e.message ?: "加载版本失败"
+                _error.value = null  // 有缓存时不显示错误
             } finally {
                 _loading.value = false
             }

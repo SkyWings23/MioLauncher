@@ -42,8 +42,8 @@ class MioRepository(private val context: Context) {
     private val versionsCacheFile = File(context.filesDir, "mio/versions_cache.json")
 
     suspend fun loadVersions(onProgress: (Double) -> Unit = {}): List<GameVersion> = withContext(Dispatchers.IO) {
-        // 先读磁盘缓存，秒开
-        readVersionsCache()?.let { return@withContext it }
+        // 先读磁盘缓存（秒开，不阻塞显示）
+        readVersionsCache(allowStale = true)?.let { return@withContext it }
 
         val task = gameVersionList.loadAsync("")
         val executor = task.executor()
@@ -61,11 +61,16 @@ class MioRepository(private val context: Context) {
         result
     }
 
-    /** 读取版本列表磁盘缓存 */
-    private fun readVersionsCache(): List<GameVersion>? {
+    /** 只读缓存（可能过期），无缓存返回 null */
+    fun loadVersionsCached(): List<GameVersion>? =
+        readVersionsCache(allowStale = true)
+
+    /** 读取版本列表磁盘缓存。allowStale=true 时即使过期也返回（网络失败兜底）。 */
+    private fun readVersionsCache(allowStale: Boolean = false): List<GameVersion>? {
         return try {
             if (!versionsCacheFile.isFile) return null
-            if (System.currentTimeMillis() - versionsCacheFile.lastModified() > 24 * 3600 * 1000) {
+            if (!allowStale
+                && System.currentTimeMillis() - versionsCacheFile.lastModified() > 7 * 24 * 3600 * 1000) {
                 return null
             }
             val arr = com.google.gson.JsonParser.parseString(versionsCacheFile.readText()).asJsonArray
