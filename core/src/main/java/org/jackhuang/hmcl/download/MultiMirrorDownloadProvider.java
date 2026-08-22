@@ -35,12 +35,12 @@ public final class MultiMirrorDownloadProvider implements DownloadProvider {
 
     @Override
     public List<URI> getVersionListURLs() {
-        // 版本清单（小文件）优先走 Mojang 官方（稳定，bmclapi CDN 防盗链不稳定）
+        // 版本清单镜像优先（bmclapi2 设备实测 0.65s 快且完整），官方兜底
         LinkedHashSet<URI> urls = new LinkedHashSet<>();
-        urls.addAll(mojang.getVersionListURLs());
         for (DownloadProvider mirror : mirrors) {
             urls.addAll(mirror.getVersionListURLs());
         }
+        urls.addAll(mojang.getVersionListURLs());
         return List.copyOf(urls);
     }
 
@@ -62,13 +62,12 @@ public final class MultiMirrorDownloadProvider implements DownloadProvider {
     @Override
     public List<URI> injectURLWithCandidates(String baseURL) {
         LinkedHashSet<URI> candidates = new LinkedHashSet<>();
-        // 官方源优先：piston-meta/piston-data/libraries.minecraft.net 稳定直连。
-        // bmclapi 镜像的 manifest/版本json 会 302 到 *.749333.xyz（Cloudflare，国内不可达），
-        // 故镜像只作兜底。libraries 镜像重定向到教育网可用，保留。
-        candidates.addAll(mojang.injectURLWithCandidates(baseURL));
+        // 文件下载镜像优先（bmclapi 国内快，libraries 重定向教育网可用），官方兜底。
+        // manifest/版本json 单独在 getVersionListURLs 中官方优先（bmclapi 会 302 到被墙域名）。
         for (DownloadProvider mirror : mirrors) {
             candidates.addAll(mirror.injectURLWithCandidates(baseURL));
         }
+        candidates.addAll(mojang.injectURLWithCandidates(baseURL));
         return List.copyOf(candidates);
     }
 
