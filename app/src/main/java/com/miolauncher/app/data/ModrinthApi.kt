@@ -84,7 +84,78 @@ object ModrinthApi {
         val gallery: List<String>,
     )
 
+    /** API 基地址候选：国内镜像优先（mcimirror.top），官方兜底 */
+    private val API_BASES = listOf(
+        "https://mod.mcimirror.top/modrinth",
+        "https://api.modrinth.com",
+    )
+
+    /** 文件 CDN 基地址候选：镜像优先，官方兜底 */
+    private val CDN_BASES = listOf(
+        "https://mod.mcimirror.top",
+        "https://cdn.modrinth.com",
+    )
+
+    /** 把 api.modrinth.com 的 URL 替换到指定 base */
+    private fun withBase(url: String, base: String): String =
+        url.replace("https://api.modrinth.com", base)
+
+    /** 把 cdn.modrinth.com 的 URL 替换到指定 base */
+    private fun cdnWithBase(url: String, base: String): String =
+        url.replace("https://cdn.modrinth.com", base)
+
+    /** 获取可用的文件下载 URL（CDN 镜像优先） */
+    fun fileDownloadUrl(original: String): String {
+        for (base in CDN_BASES) {
+            val u = cdnWithBase(original, base)
+            if (u == original) return original
+            if (HttpUtils.checkReachable(u)) return u
+        }
+        return original
+    }
+
+    private object HttpUtils {
+        fun checkReachable(url: String): Boolean {
+            return try {
+                val conn = URL(url).openConnection() as HttpURLConnection
+                try {
+                    conn.connectTimeout = 5000
+                    conn.readTimeout = 5000
+                    conn.requestMethod = "HEAD"
+                    conn.setRequestProperty("User-Agent", "MioLauncher/0.1.0")
+                    conn.responseCode in 200..299
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (e: Exception) {
+                false
+            }
+        }
+    }
+
     private fun getJson(url: String): JsonObject? {
+        // 依次尝试：镜像 → 官方，任一成功即返回
+        var result: JsonObject? = null
+        for (base in API_BASES) {
+            val u = withBase(url, base)
+            result = request(u)
+            if (result != null) return result
+        }
+        return result
+    }
+
+    private fun getJsonArray(url: String): JsonArray? {
+        // 依次尝试：镜像 → 官方，任一成功即返回
+        var result: JsonArray? = null
+        for (base in API_BASES) {
+            val u = withBase(url, base)
+            result = requestArray(u)
+            if (result != null) return result
+        }
+        return result
+    }
+
+    private fun request(url: String): JsonObject? {
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.connectTimeout = 10000
@@ -100,7 +171,7 @@ object ModrinthApi {
         }
     }
 
-    private fun getJsonArray(url: String): JsonArray? {
+    private fun requestArray(url: String): JsonArray? {
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.connectTimeout = 10000

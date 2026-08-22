@@ -21,9 +21,8 @@ class MioRepository(private val context: Context) {
     val gameDir: File = File(context.filesDir, "mio/game").apply { mkdirs() }
 
     private val downloadProvider: DownloadProvider = org.jackhuang.hmcl.download.MultiMirrorDownloadProvider(
-        "https://bmclapi2.bangbang93.com",
         "https://bmclapi.tencentcloudapi.com",
-        "https://bmclapi.izf.moe",
+        "https://bmclapi2.bangbang93.com",
     )
 
     private val gameRepository: DefaultGameRepository = DefaultGameRepository(gameDir.toPath())

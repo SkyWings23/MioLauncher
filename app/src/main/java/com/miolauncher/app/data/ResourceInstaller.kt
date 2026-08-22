@@ -136,7 +136,7 @@ object ResourceInstaller {
                     onStatus("下载前置：${file.filename}")
                     DownloadManager.setStage(taskId, "前置：${file.filename}")
                 }
-                val conn = URL(file.url).openConnection() as HttpURLConnection
+                val conn = URL(ModrinthApi.fileDownloadUrl(file.url)).openConnection() as HttpURLConnection
                 try {
                     conn.connectTimeout = 15000
                     conn.readTimeout = 20000

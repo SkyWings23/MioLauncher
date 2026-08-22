@@ -61,11 +61,12 @@ public final class MultiMirrorDownloadProvider implements DownloadProvider {
     @Override
     public List<URI> injectURLWithCandidates(String baseURL) {
         LinkedHashSet<URI> candidates = new LinkedHashSet<>();
-        // 原始 Mojang URL 作为最后兜底
-        candidates.addAll(mojang.injectURLWithCandidates(baseURL));
+        // 镜像优先（FCL 同款策略），Mojang 官方 URL 最后兜底。
+        // bmclapi2 的 Forge maven 端点可能 404，排在 tencentcloudapi 后避免先连失败源。
         for (DownloadProvider mirror : mirrors) {
             candidates.addAll(mirror.injectURLWithCandidates(baseURL));
         }
+        candidates.addAll(mojang.injectURLWithCandidates(baseURL));
         return List.copyOf(candidates);
     }
 
