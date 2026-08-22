@@ -66,6 +66,7 @@ data class ResourceDetail(
 @Composable
 fun ResourceDetailScreen(
     detail: ResourceDetail,
+    versionId: String? = null,
     onBack: () -> Unit,
     onInstalled: () -> Unit,
 ) {
@@ -132,6 +133,7 @@ fun ResourceDetailScreen(
                         detail.gameVersion, detail.loaders,
                         taskId = taskId,
                         includeDeps = includeDeps,
+                        versionId = versionId,
                         onStatus = { s -> status = s },
                     )
                 }

@@ -1,6 +1,7 @@
 package com.miolauncher.app.ui.screens
 
 import android.graphics.BitmapFactory
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -92,13 +93,42 @@ fun ModListScreen(selectedVersionId: String? = null) {
                 val json = active?.let { File(repo.gameDir, "versions/${it.id}/${it.id}.json") }
                 val loader = json?.let { ModJarReader.detectVersionLoader(it) } ?: ModLoader.NONE
                 currentVersion = CurrentVersion(active?.id, loader)
-                entries = ModManager.list(context, active?.id, loader)
+                entries = ModManager.list(context, active?.id, loader, active?.id)
                 loading = false
             }
         }
     }
 
     LaunchedEffect(selectedVersionId) { reload() }
+
+    // 自定义导入：系统文件选择器选 jar
+    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val err = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val tmp = File(context.cacheDir, "import_mod_${System.currentTimeMillis()}.jar")
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            tmp.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        val r = com.miolauncher.app.data.ResourceImporter.import(
+                            context, com.miolauncher.app.data.ResourceInstaller.Type.MOD, tmp, currentVersion?.id,
+                        )
+                        tmp.delete()
+                        r
+                    }.getOrNull()
+                }
+                if (err != null) {
+                    Toast.makeText(context, "导入失败：$err", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, "模组导入成功", Toast.LENGTH_SHORT).show()
+                }
+                reload()
+            }
+        }
+    }
 
     val shown = entries.filter { if (filterAll) true else it.compatible }
 
@@ -122,6 +152,11 @@ fun ModListScreen(selectedVersionId: String? = null) {
                 label = { Text("全部") },
             )
             Spacer(Modifier.weight(1f))
+            FilterChip(
+                selected = false,
+                onClick = { importLauncher.launch(arrayOf("application/java-archive", "application/zip", "*/*")) },
+                label = { Text("导入") },
+            )
             Text(
                 text = "${entries.size} 个",
                 style = MaterialTheme.typography.bodySmall,
@@ -185,7 +220,7 @@ fun ModListScreen(selectedVersionId: String? = null) {
                         onToggle = {
                             scope.launch {
                                 withContext(Dispatchers.IO) {
-                                    ModManager.setEnabled(context, entry.fileName, !entry.enabled)
+                                    ModManager.setEnabled(context, currentVersion?.id, entry.fileName, !entry.enabled)
                                 }
                                 reload()
                             }
@@ -204,7 +239,7 @@ fun ModListScreen(selectedVersionId: String? = null) {
             onToggle = {
                 scope.launch {
                     withContext(Dispatchers.IO) {
-                        ModManager.setEnabled(context, entry.fileName, !entry.enabled)
+                        ModManager.setEnabled(context, currentVersion?.id, entry.fileName, !entry.enabled)
                     }
                     detail = null
                     reload()
@@ -224,7 +259,7 @@ fun ModListScreen(selectedVersionId: String? = null) {
                     deleteTarget = null
                     scope.launch {
                         withContext(Dispatchers.IO) {
-                            ModManager.delete(context, entry.fileName)
+                            ModManager.delete(context, currentVersion?.id, entry.fileName)
                             ModManager.clearCache()
                         }
                         reload()
@@ -299,6 +334,7 @@ private fun ModRow(
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = buildString {
+                        append(if (entry.source == ModManager.Source.ISOLATED) "隔离 · " else "全局 · ")
                         if (entry.loader != ModLoader.NONE) append(entry.loader.label()).append(" · ")
                         if (entry.modVersion.isNotBlank()) append(entry.modVersion).append(" · ")
                         append(entry.baseName)

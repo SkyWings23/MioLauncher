@@ -28,18 +28,38 @@ object ResourceInstaller {
         val dependencyNames: List<String>,
     )
 
-    private fun targetDir(context: Context, type: Type): File =
-        File(MioRepository(context).gameDir, type.dirName).apply { mkdirs() }
+    private fun targetDir(context: Context, type: Type, versionId: String? = null): File {
+        if (versionId != null) {
+            val inst = com.miolauncher.app.data.VersionConfigStore.getInstanceDir(context, versionId)
+            if (inst != null) {
+                val dir = File(inst, type.dirName)
+                if (!dir.isDirectory) dir.mkdirs()
+                return dir
+            }
+        }
+        return File(MioRepository(context).gameDir, type.dirName).apply { mkdirs() }
+    }
 
     /** 目标目录下已安装的资源名列表 */
-    fun installedFiles(context: Context, type: Type): List<String> =
-        targetDir(context, type).listFiles { f -> f.isFile }
+    fun installedFiles(context: Context, type: Type, versionId: String? = null): List<String> =
+        targetDir(context, type, versionId).listFiles { f -> f.isFile }
             ?.map { it.name }
             ?.sorted()
             ?: emptyList()
 
-    fun delete(context: Context, type: Type, fileName: String) {
-        File(targetDir(context, type), fileName).delete()
+    fun delete(context: Context, type: Type, fileName: String, versionId: String? = null) {
+        File(targetDir(context, type, versionId), fileName).delete()
+    }
+
+    /** 写入一个本地资源文件（自定义导入用），返回目标文件 */
+    fun writeFile(context: Context, type: Type, versionId: String?, name: String, bytes: ByteArray): File? {
+        return try {
+            val f = File(targetDir(context, type, versionId), name)
+            f.writeBytes(bytes)
+            f
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**
@@ -57,17 +77,18 @@ object ResourceInstaller {
         loaders: List<String>,
         taskId: String,
         includeDeps: Boolean = true,
+        versionId: String? = null,
         onStatus: (String) -> Unit = {},
     ): InstallResult = withContext(Dispatchers.IO) {
         // 任务必须在任何网络操作前注册，保证悬浮窗 / 按钮状态总是可追踪
         DownloadManager.start(taskId, slug)
         try {
-            val dir = targetDir(context, type)
+            val dir = targetDir(context, type, versionId)
             val chosen = version ?: ModrinthApi.versions(slug, gameVersion, loaders).firstOrNull()
                 ?: throw InstallException("未找到 $slug 的下载资源，请检查网络或项目 ID")
 
             // 已存在同 slug 文件时先清理（避免同名冲突）
-            installedFiles(context, type).filter { it.startsWith(slug) }.forEach {
+            installedFiles(context, type, versionId).filter { it.startsWith(slug) }.forEach {
                 File(dir, it).delete()
             }
 
@@ -147,7 +168,7 @@ object ResourceInstaller {
                 // 若前置已存在（如 Fabric API 已装），跳过
                 val f = d.files.firstOrNull()
                 if (f != null) {
-                    val exists = installedFiles(context, type).any { it == f.filename }
+                    val exists = installedFiles(context, type, versionId).any { it == f.filename }
                     if (exists) {
                         depNames.add(d.versionNumber.ifBlank { f.filename })
                         DownloadManager.fileDone(taskId)

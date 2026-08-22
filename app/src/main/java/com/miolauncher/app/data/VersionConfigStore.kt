@@ -71,8 +71,8 @@ object VersionConfigStore {
         // 主菜单全景图等资源加载失败 → 纯色背景。
         linkOrCopy(java.io.File(gameDir, "assets"), java.io.File(instanceDir, "assets"))
 
-        // 为隔离版本创建独立的 mods/config/resourcepacks/saves 目录
-        val subdirs = listOf("mods", "config", "resourcepacks", "saves")
+        // 为隔离版本创建独立的 mods/config/saves/resourcepacks/shaderpacks 目录
+        val subdirs = listOf("mods", "config", "saves", "resourcepacks", "shaderpacks", "modpacks")
         for (name in subdirs) {
             val target = java.io.File(instanceDir, name)
             if (!target.isDirectory) target.mkdirs()

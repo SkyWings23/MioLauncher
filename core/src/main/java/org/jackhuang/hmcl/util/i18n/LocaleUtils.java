@@ -96,7 +96,11 @@ public final class LocaleUtils {
 
         HashMap<String, String> result = new HashMap<>();
         try (resource) {
-            new String(resource.readAllBytes(), StandardCharsets.UTF_8).lines().forEach(line -> {
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = resource.read(buf)) != -1) baos.write(buf, 0, n);
+            new String(baos.toByteArray(), StandardCharsets.UTF_8).lines().forEach(line -> {
                 if (line.startsWith("#") || line.isBlank())
                     return;
 

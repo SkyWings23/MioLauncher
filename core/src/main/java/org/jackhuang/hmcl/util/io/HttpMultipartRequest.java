@@ -52,7 +52,12 @@ public final class HttpMultipartRequest implements Closeable {
         addLine(String.format("Content-Disposition: form-data; name=\"%s\"; filename=\"%s\"", name, filename));
         addLine("Content-Type: " + contentType);
         addLine("");
-        inputStream.transferTo(stream);
+        // transferTo 需 Java 9+，手动流式拷贝兼容所有版本
+        byte[] buf = new byte[65536];
+        int n;
+        while ((n = inputStream.read(buf)) != -1) {
+            stream.write(buf, 0, n);
+        }
         addLine("");
         return this;
     }

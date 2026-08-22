@@ -38,9 +38,20 @@ public final class MioAssets {
         InputStream in = open(path);
         if (in == null) throw new IOException("Resource not found: " + path);
         try (InputStream is = in) {
-            byte[] bytes = is.readAllBytes();
+            byte[] bytes = readFullyBytes(is);
             return new String(bytes, StandardCharsets.UTF_8);
         }
+    }
+
+    /** 流式读取全部字节（readAllBytes 需 API 33，手动实现兼容所有版本） */
+    private static byte[] readFullyBytes(InputStream is) throws IOException {
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[65536];
+        int n;
+        while ((n = is.read(buf)) != -1) {
+            baos.write(buf, 0, n);
+        }
+        return baos.toByteArray();
     }
 
     private static @Nullable InputStream openFromAndroidAssets(String assetPath) {

@@ -12,6 +12,9 @@ object ModManager {
     /** 已禁用后缀：加载器只加载以 .jar 结尾的文件，改名即停用，可无损还原。 */
     const val DISABLED_SUFFIX = ".jar.disabled"
 
+    /** 模组来源：全局目录还是隔离实例目录 */
+    enum class Source { GLOBAL, ISOLATED }
+
     data class ModEntry(
         val fileName: String,          // 磁盘上的实际文件名（可能带 .disabled）
         val baseName: String,          // 原始 mods/<baseName> 文件名（启用态）
@@ -23,57 +26,91 @@ object ModManager {
         val iconBytes: ByteArray?,
         val enabled: Boolean,
         val compatible: Boolean,
+        val source: Source,            // 来源：全局 / 隔离实例
     )
 
     private val iconCache = HashMap<String, ByteArray?>()
 
     fun clearCache() = iconCache.clear()
 
-    private fun modsDir(context: Context): File =
+    /** 全局 mods 目录 */
+    private fun globalModsDir(context: Context): File =
         File(MioRepository(context).gameDir, "mods").apply { mkdirs() }
 
+    /** 该版本 mods 目录：隔离启用时返回实例目录，否则全局目录 */
+    private fun modsDir(context: Context, versionId: String?): File {
+        if (versionId != null) {
+            val inst = com.miolauncher.app.data.VersionConfigStore.getInstanceDir(context, versionId)
+            if (inst != null) {
+                val dir = File(inst, "mods")
+                if (!dir.isDirectory) dir.mkdirs()
+                return dir
+            }
+        }
+        return globalModsDir(context)
+    }
+
+    /** 按文件名定位实际文件（全局或隔离），用于启停/删除 */
+    private fun resolveFile(context: Context, versionId: String?, fileName: String): File {
+        val dirs = listOf(modsDir(context, versionId), globalModsDir(context))
+        for (d in dirs) {
+            val f = File(d, fileName)
+            if (f.isFile) return f
+        }
+        return File(modsDir(context, versionId), fileName)
+    }
+
     /**
-     * 列出本地模组。
+     * 列出模组。隔离启用时合并全局 + 隔离实例两处（各自标注来源），
+     * 隔离未启用时只列全局。
      * @param gameVersion 当前版本 id（如 1.21.11），null 则不判版本兼容
      * @param gameLoader  当前版本加载器（ModJarReader.detectVersionLoader），null=原版
      */
-    fun list(context: Context, gameVersion: String?, gameLoader: ModLoader?): List<ModEntry> {
-        val dir = modsDir(context)
-        val files = dir.listFiles { f -> f.isFile } ?: return emptyList()
-        return files
-            .filter { f ->
-                f.name.endsWith(".jar") || f.name.endsWith(DISABLED_SUFFIX)
-            }
-            .mapNotNull { f ->
-                val enabled = f.name.endsWith(".jar") && !f.name.endsWith(DISABLED_SUFFIX)
-                val baseName = if (enabled) f.name else f.name.removeSuffix(".disabled")
-                val meta = ModJarReader.readMeta(f)
-                val iconBytes = meta?.iconPath?.let { path ->
-                    synchronized(iconCache) {
-                        iconCache.getOrPut("$baseName|$path") { ModJarReader.readIconBytes(f, path) }
+    fun list(context: Context, gameVersion: String?, gameLoader: ModLoader?, versionId: String? = null): List<ModEntry> {
+        val dirs = mutableListOf<Pair<Source, File>>()
+        val inst = if (versionId != null)
+            com.miolauncher.app.data.VersionConfigStore.getInstanceDir(context, versionId) else null
+        if (inst != null) dirs.add(Source.ISOLATED to File(inst, "mods").also { it.mkdirs() })
+        dirs.add(Source.GLOBAL to globalModsDir(context))
+
+        val result = mutableListOf<ModEntry>()
+        for ((source, dir) in dirs) {
+            val files = dir.listFiles { f -> f.isFile } ?: continue
+            files.filter { f -> f.name.endsWith(".jar") || f.name.endsWith(DISABLED_SUFFIX) }
+                .forEach { f ->
+                    val enabled = f.name.endsWith(".jar") && !f.name.endsWith(DISABLED_SUFFIX)
+                    val baseName = if (enabled) f.name else f.name.removeSuffix(".disabled")
+                    val meta = ModJarReader.readMeta(f)
+                    val iconBytes = meta?.iconPath?.let { path ->
+                        synchronized(iconCache) {
+                            iconCache.getOrPut("${source}|$baseName|$path") { ModJarReader.readIconBytes(f, path) }
+                        }
                     }
+                    result.add(
+                        ModEntry(
+                            fileName = f.name,
+                            baseName = baseName,
+                            displayName = meta?.name ?: baseName,
+                            modVersion = meta?.version ?: "",
+                            description = meta?.description ?: "",
+                            loader = meta?.loader ?: ModLoader.NONE,
+                            minecraftRange = meta?.minecraftVersionRange ?: "",
+                            iconBytes = iconBytes,
+                            enabled = enabled,
+                            compatible = ModJarReader.isCompatible(meta, gameVersion, gameLoader),
+                            source = source,
+                        )
+                    )
                 }
-                ModEntry(
-                    fileName = f.name,
-                    baseName = baseName,
-                    displayName = meta?.name ?: baseName,
-                    modVersion = meta?.version ?: "",
-                    description = meta?.description ?: "",
-                    loader = meta?.loader ?: ModLoader.NONE,
-                    minecraftRange = meta?.minecraftVersionRange ?: "",
-                    iconBytes = iconBytes,
-                    enabled = enabled,
-                    compatible = ModJarReader.isCompatible(meta, gameVersion, gameLoader),
-                )
-            }
-            .sortedBy { it.baseName.lowercase() }
+        }
+        return result.sortedWith(compareBy({ it.source == Source.ISOLATED }, { it.baseName.lowercase() }))
     }
 
     /** 启用（还原文件名）。 */
-    fun setEnabled(context: Context, fileName: String, enabled: Boolean): Boolean {
-        val dir = modsDir(context)
+    fun setEnabled(context: Context, versionId: String?, fileName: String, enabled: Boolean): Boolean {
         return try {
-            val src = File(dir, fileName)
+            val src = resolveFile(context, versionId, fileName)
+            val dir = src.parentFile ?: return false
             if (!src.isFile) return false
             val target = if (enabled) {
                 if (fileName.endsWith(DISABLED_SUFFIX)) File(dir, fileName.removeSuffix(".disabled")) else src
@@ -87,7 +124,20 @@ object ModManager {
         }
     }
 
-    fun delete(context: Context, fileName: String) {
-        File(modsDir(context), fileName).delete()
+    fun delete(context: Context, versionId: String?, fileName: String) {
+        resolveFile(context, versionId, fileName).delete()
+    }
+
+    /** 往指定来源的 mods 目录写入文件（自定义导入用）。返回目标文件。 */
+    fun writeModFile(context: Context, versionId: String?, source: Source, name: String, bytes: ByteArray): File? {
+        return try {
+            val dir = if (source == Source.ISOLATED) modsDir(context, versionId)
+            else globalModsDir(context)
+            val f = File(dir, name)
+            f.writeBytes(bytes)
+            f
+        } catch (_: Exception) {
+            null
+        }
     }
 }

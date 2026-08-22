@@ -280,11 +280,11 @@ public final class JRE {
         if (jreHome == null) {
             throw new IllegalStateException("JRE " + javaMajor + " 未安装，请先下载 Java 运行时");
         }
-        setEnvironment(jreHome, context.getApplicationInfo().nativeLibraryDir, renderer, vsync);
+        setEnvironment(jreHome, context.getApplicationInfo().nativeLibraryDir, renderer, vsync, javaMajor);
 
         System.loadLibrary("pojavexec");
         net.kdt.pojavlaunch.utils.JREUtils.setDalvikJavaVM();
-        net.kdt.pojavlaunch.utils.JREUtils.setLdLibraryPath(ldLibraryPath(jreHome));
+        net.kdt.pojavlaunch.utils.JREUtils.setLdLibraryPath(ldLibraryPath(jreHome, javaMajor));
 
         // 切换到游戏工作目录（native 库已加载）
         if (workDir != null) {
@@ -313,8 +313,13 @@ public final class JRE {
 
         // 预加载 JVM 运行所需的核心库，使后续 dlopen("libjli.so") 能找到。
         String jre = jreHome.getAbsolutePath();
+        // Java 8 的 JVM 库在 lib/<abi>/ 下（如 lib/aarch64/），Java 9+ 在 lib/ 下。
+        boolean java8 = javaMajor < 9;
+        String libRoot = java8 ? libRootForAbi(jreHome) : jre + "/lib";
         preload(jre + "/lib/libjli.so");
+        preload(libRoot + "/jli/libjli.so");
         preload(jre + "/lib/server/libjvm.so");
+        preload(libRoot + "/server/libjvm.so");
         // 按依赖顺序预加载核心 JVM 库（libnet 依赖 libjava 等）
         String[] coreLibs = {
             "libjava.so", "libnet.so", "libnio.so", "libzip.so",
@@ -322,12 +327,13 @@ public final class JRE {
             "libsunec.so", "libjsig.so", "libinstrument.so", "libj2pkcs11.so",
             "libj2gss.so", "libprefs.so", "librmi.so", "libsctp.so",
             "libdt_socket.so", "libjdwp.so", "libsyslookup.so",
+            "libunpack.so",
         };
         for (String lib : coreLibs) {
-            preload(jre + "/lib/" + lib);
+            preload(libRoot + "/" + lib);
         }
         // 预加载其余所有共享库（失败的如 AWT 类可忽略）
-        File libDir = new File(jreHome, "lib");
+        File libDir = new File(libRoot);
         File[] libs = libDir.listFiles((dir, name) -> name.endsWith(".so"));
         if (libs != null) {
             for (File lib : libs) {
@@ -355,7 +361,9 @@ public final class JRE {
         List<String> fullArgs = new ArrayList<>();
         // argv[0] 需满足 dirname(argv[0]) 与 LD_LIBRARY_PATH 首段一致，
         // 否则 launcher 会尝试 re-exec（Android 上被 SELinux 拒绝）。
-        fullArgs.add(jre + "/lib/java");
+        // Java 8 用 bin/java（无 lib/java），Java 9+ 用 lib/java。
+        String launcherBinary = java8 ? jre + "/bin/java" : jre + "/lib/java";
+        fullArgs.add(launcherBinary);
         fullArgs.add("-Djava.home=" + jre);
         fullArgs.addAll(args);
 
@@ -436,24 +444,42 @@ public final class JRE {
         System.out.println("MioJRE: preload " + path + " -> " + ok);
     }
 
-    private static String ldLibraryPath(File jreHome) {
+    private static String ldLibraryPath(File jreHome, int javaMajor) {
         String jre = jreHome.getAbsolutePath();
-        String base = jre + "/lib" + ":" + jre + "/lib/jli" + ":" + jre + "/lib/server";
+        boolean java8 = javaMajor < 9;
+        String libRoot = java8 ? libRootForAbi(jreHome) : jre + "/lib";
+        String base = libRoot + ":" + libRoot + "/jli" + ":" + libRoot + "/server";
         String old = System.getenv("LD_LIBRARY_PATH");
         return (old == null || old.isEmpty()) ? base : base + ":" + old;
+    }
+
+    /** Java 8 的 JVM 库目录：lib/<abi>/（arm64 → lib/aarch64，armeabi → lib/arm） */
+    private static String libRootForAbi(File jreHome) {
+        String[] abis = android.os.Build.SUPPORTED_ABIS;
+        String abi = (abis != null && abis.length > 0) ? abis[0] : "arm64-v8a";
+        if (abi.startsWith("armeabi")) {
+            File arm = new File(jreHome, "lib/arm");
+            return arm.isDirectory() ? arm.getAbsolutePath() : new File(jreHome, "lib/aarch64").getAbsolutePath();
+        }
+        if (abi.startsWith("x86")) {
+            File x86 = new File(jreHome, "lib/i386");
+            return x86.isDirectory() ? x86.getAbsolutePath() : new File(jreHome, "lib/amd64").getAbsolutePath();
+        }
+        return new File(jreHome, "lib/aarch64").getAbsolutePath();
     }
 
     /**
      * 设置 JVM 运行所需的环境变量：JAVA_HOME / LD_LIBRARY_PATH / PATH / 渲染后端。
      */
-    private static void setEnvironment(File jreHome, String nativeDir, Renderer renderer, boolean vsync) throws Exception {
+    private static void setEnvironment(File jreHome, String nativeDir, Renderer renderer, boolean vsync, int javaMajor) throws Exception {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             throw new IllegalStateException("需要 Android 8.0+");
         }
         String jre = jreHome.getAbsolutePath();
-        String libDir = jre + "/lib";
-        String jliDir = jre + "/lib/jli";
-        String serverDir = jre + "/lib/server";
+        boolean java8 = javaMajor < 9;
+        String libDir = java8 ? libRootForAbi(jreHome) : jre + "/lib";
+        String jliDir = java8 ? libDir + "/jli" : jre + "/lib/jli";
+        String serverDir = java8 ? libDir + "/server" : jre + "/lib/server";
         String jvmPath = serverDir + "/libjvm.so";
 
         Os.setenv("JAVA_HOME", jre, true);

@@ -84,7 +84,14 @@ public final class IOUtils {
 
     public static byte[] readFully(InputStream stream) throws IOException {
         try (stream) {
-            return stream.readAllBytes();
+            // readAllBytes() 需要 API 33，用流式读取兼容所有版本（desugar 无法保证覆盖）
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = stream.read(buf)) != -1) {
+                baos.write(buf, 0, n);
+            }
+            return baos.toByteArray();
         }
     }
 

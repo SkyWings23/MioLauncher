@@ -179,6 +179,7 @@ fun DownloadScreen(
             if (current != null) {
                 ResourceDetailScreen(
                     detail = current,
+                    versionId = activeVersion?.id,
                     onBack = { detailItem = null },
                     onInstalled = { detailItem = null },
                 )

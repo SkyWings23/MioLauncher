@@ -3,12 +3,9 @@ package com.miolauncher.app.data
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.jackhuang.hmcl.download.AutoDownloadProvider
-import org.jackhuang.hmcl.download.BMCLAPIDownloadProvider
+import org.jackhuang.hmcl.download.DownloadProvider
 import org.jackhuang.hmcl.download.DefaultDependencyManager
 import org.jackhuang.hmcl.download.DefaultGameBuilder
-import org.jackhuang.hmcl.download.DownloadProvider
-import org.jackhuang.hmcl.download.MojangDownloadProvider
 import org.jackhuang.hmcl.download.game.GameRemoteVersion
 import org.jackhuang.hmcl.download.game.GameVersionList
 import org.jackhuang.hmcl.game.DefaultGameRepository
@@ -23,9 +20,10 @@ class MioRepository(private val context: Context) {
 
     val gameDir: File = File(context.filesDir, "mio/game").apply { mkdirs() }
 
-    private val downloadProvider: DownloadProvider = AutoDownloadProvider(
-        MojangDownloadProvider(),
-        BMCLAPIDownloadProvider("https://bmclapi2.bangbang93.com"),
+    private val downloadProvider: DownloadProvider = org.jackhuang.hmcl.download.MultiMirrorDownloadProvider(
+        "https://bmclapi2.bangbang93.com",
+        "https://bmclapi.tencentcloudapi.com",
+        "https://bmclapi.izf.moe",
     )
 
     private val gameRepository: DefaultGameRepository = DefaultGameRepository(gameDir.toPath())

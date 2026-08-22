@@ -182,7 +182,18 @@ public final class GameLaunch {
             else if (mv >= 17) javaMajor = 21;  // 17..24 用 Java 21（更高类文件由 25 处理）
             else if (mv >= 9) javaMajor = 17;   // 9..16 用 Java 17
             else if (mv > 0) javaMajor = 8;     // Java 6/8 老版本用 Java 8
-            // mv == 0（无声明）：现代版本默认 21
+            // mv == 0（版本 JSON 无 javaVersion 声明）：老版本按版本号推断
+            else {
+                String ver = versionId.startsWith("forge-") || versionId.startsWith("neoforge-")
+                        ? versionId.substring(versionId.indexOf('-') + 1) : versionId;
+                String lower = ver.toLowerCase(java.util.Locale.ROOT);
+                // Beta/Alpha 等远古版本（b1.x/a1.x/Beta 1.x）一律 Java 8
+                boolean ancient = lower.startsWith("b") || lower.startsWith("a1")
+                        || lower.contains("beta") || lower.contains("alpha")
+                        || lower.contains("infdev") || lower.contains("pre-classic");
+                if (!ancient && compareVersion(ver, "1.17") >= 0) javaMajor = 21;   // 1.17+ 默认 Java 17/21
+                else javaMajor = 8;                                                  // 其余老版本用 Java 8
+            }
         } catch (Throwable t) {
             android.util.Log.w("MioGame", "resolve javaMajor failed, use 21", t);
         }
@@ -219,6 +230,11 @@ public final class GameLaunch {
 
         // 启动前预写游戏选项：中文语言 + GUI 缩放自适应 + 低视距 + 低画质（按启动配置）
         prepareGameOptions(gameDir, windowW, windowH, config);
+
+        // 清除游戏 jar 的数字签名（META-INF/*.SF/*.RSA/*.DSA）。
+        // Fabric/Forge 的类转换会改写 net.minecraft 包内类，与 Mojang 签名冲突，
+        // 导致 SecurityException: signer information does not match（class "gzg"/"ezz"）。
+        stripJarSignatures(new File(gameDir, "versions/" + versionId + "/" + versionId + ".jar"));
 
         // 游戏线程优先级提到最高（FCL 同样把游戏线程设 MAX_PRIORITY），让区块加载优先拿 CPU
         Thread.currentThread().setPriority(Thread.MAX_PRIORITY);
@@ -345,7 +361,8 @@ public final class GameLaunch {
         extra.add("-javaagent:" + mioLibPatcher.getAbsolutePath());
         // MioLauncher: 干净退出清理 agent——游戏正常退出时删除崩溃标记，避免误报崩溃；
         // 真实崩溃（信号）不跑 shutdown hook，标记保留供启动时检测。
-        if (mioExitAgent.isFile()) {
+        // Java 8：MioExitAgent 为 Java 17 字节码无法加载，跳过（不影响启动，仅退出检测降级）
+        if (mioExitAgent.isFile() && javaMajor >= 9) {
             // 允许安装 SecurityManager（MioExitAgent 用它记录 System.exit 退出码以区分干净/异常退出）
             extra.add("-Djava.security.manager=allow");
             extra.add("-javaagent:" + mioExitAgent.getAbsolutePath());
@@ -491,6 +508,68 @@ public final class GameLaunch {
             }
         }
         return "1.21.11";
+    }
+
+    /**
+     * 清除游戏 jar 里的数字签名文件（META-INF/*.SF / *.RSA / *.DSA）。
+     * Fabric/Forge 的类转换器会改写 net.minecraft 包内类，与 Mojang 签名不一致时，
+     * JVM 报 SecurityException: signer information does not match（如 class "gzg"/"ezz"）。
+     * 删除签名后加载器可正常转换类；对原版无害（不校验签名）。
+     * 重写 jar 前先备份，成功才替换，避免损坏。
+     */
+    private static void stripJarSignatures(File jar) {
+        if (jar == null || !jar.isFile()) return;
+        java.util.Set<String> sigNames = new java.util.LinkedHashSet<>();
+        try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(jar)) {
+            var en = zf.entries();
+            while (en.hasMoreElements()) {
+                String name = en.nextElement().getName();
+                if (name.startsWith("META-INF/")) {
+                    String upper = name.toUpperCase(java.util.Locale.ROOT);
+                    if (upper.endsWith(".SF") || upper.endsWith(".RSA") || upper.endsWith(".DSA")) {
+                        sigNames.add(name);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("MioGame", "stripJarSignatures: 读取失败 " + jar, t);
+            return;
+        }
+        if (sigNames.isEmpty()) return;
+
+        try {
+            File tmp = new File(jar.getParentFile(), jar.getName() + ".nosig");
+            try (java.util.zip.ZipInputStream zin = new java.util.zip.ZipInputStream(new java.io.FileInputStream(jar));
+                 java.util.zip.ZipOutputStream zout = new java.util.zip.ZipOutputStream(new java.io.FileOutputStream(tmp))) {
+                byte[] buf = new byte[65536];
+                java.util.zip.ZipEntry entry;
+                while ((entry = zin.getNextEntry()) != null) {
+                    if (sigNames.contains(entry.getName())) continue;
+                    zout.putNextEntry(new java.util.zip.ZipEntry(entry.getName()));
+                    int n;
+                    while ((n = zin.read(buf)) != -1) zout.write(buf, 0, n);
+                    zout.closeEntry();
+                }
+            }
+            // 校验重写后的 zip 可读，再原子替换
+            try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(tmp)) {
+                zf.size();
+            }
+            java.io.File bak = new File(jar.getParentFile(), jar.getName() + ".bak");
+            if (bak.exists()) bak.delete();
+            if (!jar.renameTo(bak)) {
+                tmp.delete();
+                return;
+            }
+            if (!tmp.renameTo(jar)) {
+                bak.renameTo(jar);  // 回滚
+                return;
+            }
+            bak.delete();
+            android.util.Log.i("MioGame", "已清除 " + sigNames.size() + " 个签名文件: " + jar);
+        } catch (Throwable t) {
+            android.util.Log.w("MioGame", "stripJarSignatures: 处理失败 " + jar, t);
+        }
     }
 
     /**

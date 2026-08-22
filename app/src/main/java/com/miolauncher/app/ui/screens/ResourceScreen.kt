@@ -26,6 +26,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +57,7 @@ import com.miolauncher.app.ui.theme.MioGreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 private fun GameVersionType.label(): String = when (this) {
     GameVersionType.RELEASE -> "正式版"
@@ -115,9 +117,9 @@ fun ResourceScreen(
         when (selectedTab) {
             0 -> InstalledVersionList()
             1 -> ModListScreen(selectedVersionId = selectedVersionId)
-            2 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.SHADER)
-            3 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.WORLD)
-            4 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.MODPACK)
+            2 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.SHADER, selectedVersionId)
+            3 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.WORLD, selectedVersionId)
+            4 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.MODPACK, selectedVersionId)
         }
     }
 }
@@ -300,62 +302,173 @@ private fun DeleteVersionDialog(
 }
 
 @Composable
-private fun LocalResourceList(type: com.miolauncher.app.data.ResourceInstaller.Type) {
+private fun LocalResourceList(
+    type: com.miolauncher.app.data.ResourceInstaller.Type,
+    selectedVersionId: String? = null,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var items by remember { mutableStateOf<List<String>>(emptyList()) }
-    var deleteTarget by remember { mutableStateOf<String?>(null) }
+    var items by remember { mutableStateOf<List<Pair<com.miolauncher.app.data.ModManager.Source, String>>>(emptyList()) }
+    var deleteTarget by remember { mutableStateOf<Pair<com.miolauncher.app.data.ModManager.Source, String>?>(null) }
+    var filterAll by remember { mutableStateOf(false) }
+    var isolated by remember { mutableStateOf(false) }
+
+    val versionId = selectedVersionId
 
     fun reload() {
         scope.launch {
             withContext(Dispatchers.IO) {
-                items = com.miolauncher.app.data.ResourceInstaller.installedFiles(context, type)
-            }
-        }
-    }
-
-    LaunchedEffect(type) { reload() }
-
-    if (items.isEmpty()) {
-        EmptyResourceHint()
-    } else {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            item {
-                Text(
-                    text = "已安装 ${items.size} 个${typeLabel(type)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                )
-            }
-            items(items) { name ->
-                DownloadRow(
-                    title = name,
-                    subtitle = "本地文件",
-                    extra = typeLabel(type),
-                    installed = true,
-                    icon = { Icon(Icons.Filled.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(28.dp)) },
-                    onClick = { },
-                    trailing = {
-                        IconButton(onClick = { deleteTarget = name }) {
-                            Icon(
-                                Icons.Filled.Delete,
-                                contentDescription = "删除",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(22.dp),
-                            )
+                val list = mutableListOf<Pair<com.miolauncher.app.data.ModManager.Source, String>>()
+                if (versionId != null) {
+                    val inst = com.miolauncher.app.data.VersionConfigStore.getInstanceDir(context, versionId)
+                    if (inst != null) {
+                        isolated = true
+                        val instDir = File(inst, type.dirName)
+                        if (instDir.isDirectory) {
+                            instDir.listFiles { f -> f.isFile }?.forEach { f ->
+                                list.add(com.miolauncher.app.data.ModManager.Source.ISOLATED to f.name)
+                            }
                         }
-                    },
-                )
+                    }
+                }
+                val globalDir = File(com.miolauncher.app.data.MioRepository(context).gameDir, type.dirName)
+                if (globalDir.isDirectory) {
+                    globalDir.listFiles { f -> f.isFile }?.forEach { f ->
+                        list.add(com.miolauncher.app.data.ModManager.Source.GLOBAL to f.name)
+                    }
+                }
+                items = list.sortedWith(compareBy({ it.first == com.miolauncher.app.data.ModManager.Source.ISOLATED }, { it.second.lowercase() }))
             }
         }
     }
 
-    deleteTarget?.let { name ->
+    LaunchedEffect(type, versionId) { reload() }
+
+    // 自定义导入：系统文件选择器
+    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val err = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val ext = if (type == com.miolauncher.app.data.ResourceInstaller.Type.MOD) "jar" else "zip"
+                        val tmp = File(context.cacheDir, "import_${System.currentTimeMillis()}.$ext")
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            tmp.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        val r = com.miolauncher.app.data.ResourceImporter.import(context, type, tmp, versionId)
+                        tmp.delete()
+                        r
+                    }.getOrNull()
+                }
+                if (err != null) {
+                    Toast.makeText(context, "导入失败：$err", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, "导入成功", Toast.LENGTH_SHORT).show()
+                }
+                reload()
+            }
+        }
+    }
+
+    val shown = items.filter { if (filterAll) true else it.first == com.miolauncher.app.data.ModManager.Source.GLOBAL || isolated }
+
+    Column(Modifier.fillMaxSize()) {
+        // 筛选：可用 / 全部
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+        ) {
+            FilterChip(
+                selected = !filterAll,
+                onClick = { filterAll = false },
+                label = { Text("可用") },
+            )
+            FilterChip(
+                selected = filterAll,
+                onClick = { filterAll = true },
+                label = { Text("全部") },
+            )
+            Spacer(Modifier.weight(1f))
+            FilterChip(
+                selected = false,
+                onClick = {
+                    val mime = if (type == com.miolauncher.app.data.ResourceInstaller.Type.MOD)
+                        arrayOf("application/java-archive", "application/zip", "*/*")
+                    else arrayOf("application/zip", "*/*")
+                    importLauncher.launch(mime)
+                },
+                label = { Text("导入") },
+            )
+            Text(
+                text = "${items.size} 个",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.CenterVertically),
+            )
+        }
+
+        if (items.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Filled.Folder,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(56.dp),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(com.miolauncher.app.ui.theme.I18n.tr("res.empty"), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(4.dp))
+                    Text(com.miolauncher.app.ui.theme.I18n.tr("res.go_download"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+                }
+            }
+        } else if (shown.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("当前版本未启用隔离，全部文件属于全局", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item {
+                    Text(
+                        text = "已安装 ${items.size} 个${typeLabel(type)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
+                items(shown, key = { "${it.first}-${it.second}" }) { (source, name) ->
+                    DownloadRow(
+                        title = name,
+                        subtitle = if (source == com.miolauncher.app.data.ModManager.Source.ISOLATED) "隔离实例" else "全局目录",
+                        extra = typeLabel(type),
+                        installed = true,
+                        icon = { Icon(Icons.Filled.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(28.dp)) },
+                        onClick = { },
+                        trailing = {
+                            IconButton(onClick = { deleteTarget = source to name }) {
+                                Icon(
+                                    Icons.Filled.Delete,
+                                    contentDescription = "删除",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    deleteTarget?.let { (source, name) ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text("${com.miolauncher.app.ui.theme.I18n.tr("res.delete")} $name？", fontWeight = FontWeight.Bold) },
@@ -365,7 +478,12 @@ private fun LocalResourceList(type: com.miolauncher.app.data.ResourceInstaller.T
                     deleteTarget = null
                     scope.launch {
                         withContext(Dispatchers.IO) {
-                            com.miolauncher.app.data.ResourceInstaller.delete(context, type, name)
+                            if (source == com.miolauncher.app.data.ModManager.Source.ISOLATED) {
+                                val inst = com.miolauncher.app.data.VersionConfigStore.getInstanceDir(context, versionId!!)
+                                File(inst, "${type.dirName}/$name").delete()
+                            } else {
+                                com.miolauncher.app.data.ResourceInstaller.delete(context, type, name)
+                            }
                         }
                         reload()
                     }
