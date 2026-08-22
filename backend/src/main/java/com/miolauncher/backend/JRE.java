@@ -320,15 +320,20 @@ public final class JRE {
         preload(libRoot + "/jli/libjli.so");
         preload(jre + "/lib/server/libjvm.so");
         preload(libRoot + "/server/libjvm.so");
-        // 按依赖顺序预加载核心 JVM 库（libnet 依赖 libjava 等）
+        // 按依赖顺序预加载核心 JVM 库。Java 8 的 libjava/libnet/libnio 互相依赖，
+        // 且依赖 libverify/libzip，顺序错误会 dlopen 失败。这里先加载底层库再加载上层。
         String[] coreLibs = {
-            "libjava.so", "libnet.so", "libnio.so", "libzip.so",
-            "libjimage.so", "libverify.so", "libextnet.so",
+            "libverify.so", "libzip.so", "libjimage.so", "libextnet.so",
+            "libjava.so", "libnet.so", "libnio.so",
             "libsunec.so", "libjsig.so", "libinstrument.so", "libj2pkcs11.so",
             "libj2gss.so", "libprefs.so", "librmi.so", "libsctp.so",
             "libdt_socket.so", "libjdwp.so", "libsyslookup.so",
             "libunpack.so",
         };
+        for (String lib : coreLibs) {
+            preload(libRoot + "/" + lib);
+        }
+        // 失败的库重试（依赖可能由后续库补齐）
         for (String lib : coreLibs) {
             preload(libRoot + "/" + lib);
         }

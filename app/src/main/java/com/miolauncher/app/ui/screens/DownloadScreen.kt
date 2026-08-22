@@ -598,8 +598,16 @@ private fun InstallProgressPanel(
     onRetry: () -> Unit,
     onInstall: (String) -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var filterType by remember { mutableStateOf<GameVersionType?>(null) }
-    val filtered = if (filterType == null) versions else versions.filter { it.type == filterType }
+    // 隐藏非标准版本（带后缀的如 26.3-snapshot-9、1.21.11_unobfuscated）
+    var hideNonStandard by remember {
+        mutableStateOf(com.miolauncher.app.data.UiSettingsStore.hideNonStandardVersions(context))
+    }
+    var filtered = if (filterType == null) versions else versions.filter { it.type == filterType }
+    if (hideNonStandard) {
+        filtered = filtered.filter { isStandardVersionId(it.id) }
+    }
 
     when {
         loading && versions.isEmpty() -> {
@@ -641,6 +649,16 @@ private fun InstallProgressPanel(
                         FilterChip("旧版", filterType == GameVersionType.BETA || filterType == GameVersionType.ALPHA) {
                             filterType = if (filterType == GameVersionType.BETA || filterType == GameVersionType.ALPHA) null else GameVersionType.BETA
                         }
+                        Spacer(Modifier.weight(1f))
+                        // 隐藏非标准版本开关（如 26.3-snapshot-9、1.21.11_unobfuscated）
+                        FilterChip(
+                            text = "仅正式版",
+                            selected = hideNonStandard,
+                            onClick = {
+                                hideNonStandard = !hideNonStandard
+                                com.miolauncher.app.data.UiSettingsStore.setHideNonStandardVersions(context, hideNonStandard)
+                            },
+                        )
                     }
                 }
                 if (filtered.isEmpty()) {
@@ -1057,9 +1075,17 @@ private fun ModpackDownloadList(onOpen: (ModpackInfo) -> Unit) {
     }
 }
 
-private fun formatSize(bytes: Long): String {
+ private fun formatSize(bytes: Long): String {
     val mb = bytes / 1_000_000.0
     return if (mb >= 1000) "${(mb / 1000).toInt()}GB" else "${mb.toInt()}MB"
+}
+
+/**
+ * 判断是否为标准版本号（如 1.21.11、26.3）。带后缀的（26.3-snapshot-9、
+ * 1.21.11_unobfuscated、b1.0、a1.2.6 等）返回 false，供"仅正式版"开关过滤。
+ */
+private fun isStandardVersionId(id: String): Boolean {
+    return Regex("^\\d+\\.\\d+(\\.\\d+)?$").matches(id)
 }
 
 private val GameVersionType.label: String

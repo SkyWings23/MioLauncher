@@ -232,8 +232,8 @@ class MioRepository(private val context: Context) {
         gameRepository.refresh()
     }
 
-    /** 内置 JRE 的 Java 主版本号 */
-    fun bundledJavaMajor(): Int = 21
+    /** 内置 JRE 支持的最高 Java 主版本号（8 / 17 / 21 / 25，启动时按版本自动选） */
+    fun bundledJavaMajor(): Int = 25
 
     /**
      * 检测指定版本所需的最低 Java 主版本号。
@@ -251,7 +251,7 @@ class MioRepository(private val context: Context) {
         }
     }
 
-    /** 该版本是否与内置 Java 21 兼容（未知则默认兼容，避免误报） */
+    /** 该版本是否与内置 JRE 兼容（未知则默认兼容，避免误报） */
     fun isVersionJavaCompatible(versionId: String): Boolean {
         val required = requiredJavaMajor(versionId) ?: return true
         return required <= bundledJavaMajor()
@@ -261,8 +261,7 @@ class MioRepository(private val context: Context) {
     fun javaCompatibilityMessage(versionId: String): String? {
         val required = requiredJavaMajor(versionId) ?: return null
         if (required <= bundledJavaMajor()) return null
-        return "该版本需要 Java $required，当前启动器内置 Java ${bundledJavaMajor()}，无法运行此版本。" +
-                "请选择 1.21.x 或更早的版本（内置 Java 21 兼容）。"
+        return "该版本需要 Java $required，启动器最高支持 Java ${bundledJavaMajor()}，无法运行此版本。"
     }
 
     private fun GameRemoteVersion.toGameVersion(): GameVersion {

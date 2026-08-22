@@ -9,6 +9,7 @@ object UiSettingsStore {
     private const val PREF = "mio_ui"
     private const val KEY_SHOW_SPLASH = "ui_show_splash"
     private const val KEY_APP_LANG = "ui_app_lang"
+    private const val KEY_HIDE_NON_STANDARD = "ui_hide_non_standard_versions"
 
     fun showSplash(context: Context): Boolean =
         context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(KEY_SHOW_SPLASH, true)
@@ -16,6 +17,14 @@ object UiSettingsStore {
     fun setShowSplash(context: Context, value: Boolean) {
         context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_SHOW_SPLASH, value).apply()
+    }
+
+    fun hideNonStandardVersions(context: Context): Boolean =
+        context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(KEY_HIDE_NON_STANDARD, false)
+
+    fun setHideNonStandardVersions(context: Context, value: Boolean) {
+        context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_HIDE_NON_STANDARD, value).apply()
     }
 
     fun appLang(context: Context): String =

@@ -73,11 +73,14 @@ public final class GameLaunch {
         org.jackhuang.hmcl.game.GameInstanceManifest manifest =
                 repository.getResolvedInstanceManifest(id).launchManifest();
 
-        // 按版本所需 Java 主版本选择对应 JRE（如 26.x 需要 Java 25 → 用内置 jre25）
+        // 按版本所需 Java 主版本选择对应 JRE（8 / 17 / 21 / 25）
         int javaMajor = 21;
         if (manifest.javaVersion() != null) {
             int need = manifest.javaVersion().majorVersion();
-            if (need > 21) javaMajor = need;
+            if (need >= 25) javaMajor = 25;
+            else if (need >= 17) javaMajor = 21;
+            else if (need >= 9) javaMajor = 17;
+            else if (need > 0) javaMajor = 8;
         }
         // 确保对应 JRE 已安装（assets 内置，解压即可）
         JRE.ensureInstalled(context, javaMajor);
@@ -178,6 +181,8 @@ public final class GameLaunch {
             org.jackhuang.hmcl.game.GameInstanceManifest m =
                     repo.getResolvedInstanceManifest(new GameInstanceID(versionId)).launchManifest();
             int mv = m.javaVersion() != null ? m.javaVersion().majorVersion() : 0;
+            android.util.Log.i("MioGame", "resolve javaMajor: versionId=" + versionId + " declaredJavaVersion="
+                    + (m.javaVersion() == null ? "null" : m.javaVersion().toString()) + " mv=" + mv);
             if (mv >= 25) javaMajor = 25;       // 26.x 等需要 Java 25
             else if (mv >= 17) javaMajor = 21;  // 17..24 用 Java 21（更高类文件由 25 处理）
             else if (mv >= 9) javaMajor = 17;   // 9..16 用 Java 17
@@ -361,8 +366,9 @@ public final class GameLaunch {
         extra.add("-javaagent:" + mioLibPatcher.getAbsolutePath());
         // MioLauncher: 干净退出清理 agent——游戏正常退出时删除崩溃标记，避免误报崩溃；
         // 真实崩溃（信号）不跑 shutdown hook，标记保留供启动时检测。
-        // Java 8：MioExitAgent 为 Java 17 字节码无法加载，跳过（不影响启动，仅退出检测降级）
-        if (mioExitAgent.isFile() && javaMajor >= 9) {
+        // Java 8：MioExitAgent 为 Java 17 字节码无法加载，跳过。
+        // Java 24+：SecurityManager 已移除，-Djava.security.manager=allow 会直接报错，跳过。
+        if (mioExitAgent.isFile() && javaMajor >= 9 && javaMajor < 24) {
             // 允许安装 SecurityManager（MioExitAgent 用它记录 System.exit 退出码以区分干净/异常退出）
             extra.add("-Djava.security.manager=allow");
             extra.add("-javaagent:" + mioExitAgent.getAbsolutePath());
@@ -508,12 +514,19 @@ public final class GameLaunch {
     }
 
     /**
-     * 从启动命令行解析版本 ID（HMCL raw command 含 "--version <id>"）。
+     * 从启动命令行解析版本 ID。
+     * 优先 "--version <id>"；其次从 classpath 的 versions/<id>/<id>.jar 路径提取；
+     * 再其次从 -Dminecraft.client.jar=<...>versions/<id>/<id>.jar 提取。
      */
-    private static String findVersionId(List<String> rawCommand) {        for (int i = 0; i < rawCommand.size() - 1; i++) {
+    private static String findVersionId(List<String> rawCommand) {
+        for (int i = 0; i < rawCommand.size() - 1; i++) {
             if ("--version".equals(rawCommand.get(i))) {
                 return rawCommand.get(i + 1);
             }
+        }
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("versions/([^/]+)/\\1\\.jar").matcher(String.join(" ", rawCommand));
+        if (m.find()) {
+            return m.group(1);
         }
         return "1.21.11";
     }
