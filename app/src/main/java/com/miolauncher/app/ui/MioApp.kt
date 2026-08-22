@@ -3,6 +3,7 @@ package com.miolauncher.app.ui
 import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -10,6 +11,10 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -218,48 +223,68 @@ fun MioApp() {
                         .fillMaxSize()
                         .padding(innerPadding)
                 ) {
-                    when (currentTab) {
-                        MainTab.HOME -> HomeScreen(
-                            selectedVersionId = selectedVersionId,
-                            onSelectVersion = { id ->
-                                selectedVersionId = id
-                                com.miolauncher.app.data.GameVersionStore.set(context, id)
-                            },
-                            onLaunch = ::launchVersion,
-                            onNavigateToTab = { idx ->
-                                currentTab = MainTab.entries[idx]
-                            },
-                            onOpenDownloadTab = { tab ->
-                                downloadTab = tab
-                                currentTab = MainTab.DOWNLOAD
-                            },
-                            onOpenLaunchSettings = {
-                                openLaunchSettings = true
-                                currentTab = MainTab.PROFILE
-                            },
-                        )
-                        MainTab.DOWNLOAD -> DownloadScreen(
-                            selectedTab = downloadTab,
-                            onTabSelected = { downloadTab = it },
-                            versionListViewModel = versionListViewModel,
-                            selectedVersionId = selectedVersionId,
-                        )
-                        MainTab.RESOURCE -> ResourceScreen(
-                            selectedVersionId = selectedVersionId,
-                            onSelectVersion = { id ->
-                                selectedVersionId = id
-                                com.miolauncher.app.data.GameVersionStore.set(context, id)
-                            },
-                            selectedTab = resourceTab,
-                            onTabSelected = { resourceTab = it },
-                        )
-                        MainTab.PROFILE -> ProfileScreen(
-                            darkTheme = darkTheme,
-                            onThemeChange = { darkTheme = it },
-                            openLaunchSettings = openLaunchSettings,
-                            onConsumeOpenLaunchSettings = { openLaunchSettings = false },
-                        )
-                        MainTab.MULTIPLAYER -> MultiplayerScreen(onBack = { currentTab = MainTab.HOME })
+                    // 页面切换动画（可在设置中开关 / 调时长）。
+                    // 每次重组时读取，设置页修改后返回即生效
+                    val pageAnimEnabled = com.miolauncher.app.data.UiSettingsStore.pageAnimationEnabled(context)
+                    val pageAnimMs = com.miolauncher.app.data.UiSettingsStore.pageAnimationMs(context)
+                    androidx.compose.animation.AnimatedContent(
+                        targetState = currentTab,
+                        transitionSpec = {
+                            if (pageAnimEnabled) {
+                                val duration = pageAnimMs
+                                val enter = fadeIn(androidx.compose.animation.core.tween(duration)) +
+                                    slideInHorizontally(androidx.compose.animation.core.tween(duration)) { it / 5 }
+                                val exit = fadeOut(androidx.compose.animation.core.tween(duration))
+                                enter togetherWith exit
+                            } else {
+                                fadeIn() togetherWith fadeOut()
+                            }
+                        },
+                        contentKey = { it },
+                    ) { tab ->
+                        when (tab) {
+                            MainTab.HOME -> HomeScreen(
+                                selectedVersionId = selectedVersionId,
+                                onSelectVersion = { id ->
+                                    selectedVersionId = id
+                                    com.miolauncher.app.data.GameVersionStore.set(context, id)
+                                },
+                                onLaunch = ::launchVersion,
+                                onNavigateToTab = { idx ->
+                                    currentTab = MainTab.entries[idx]
+                                },
+                                onOpenDownloadTab = { t ->
+                                    downloadTab = t
+                                    currentTab = MainTab.DOWNLOAD
+                                },
+                                onOpenLaunchSettings = {
+                                    openLaunchSettings = true
+                                    currentTab = MainTab.PROFILE
+                                },
+                            )
+                            MainTab.DOWNLOAD -> DownloadScreen(
+                                selectedTab = downloadTab,
+                                onTabSelected = { downloadTab = it },
+                                versionListViewModel = versionListViewModel,
+                                selectedVersionId = selectedVersionId,
+                            )
+                            MainTab.RESOURCE -> ResourceScreen(
+                                selectedVersionId = selectedVersionId,
+                                onSelectVersion = { id ->
+                                    selectedVersionId = id
+                                    com.miolauncher.app.data.GameVersionStore.set(context, id)
+                                },
+                                selectedTab = resourceTab,
+                                onTabSelected = { resourceTab = it },
+                            )
+                            MainTab.PROFILE -> ProfileScreen(
+                                darkTheme = darkTheme,
+                                onThemeChange = { darkTheme = it },
+                                openLaunchSettings = openLaunchSettings,
+                                onConsumeOpenLaunchSettings = { openLaunchSettings = false },
+                            )
+                            MainTab.MULTIPLAYER -> MultiplayerScreen(onBack = { currentTab = MainTab.HOME })
+                        }
                     }
 
                     // 全局统一下载悬浮窗（所有页签可见）

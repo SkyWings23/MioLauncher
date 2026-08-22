@@ -80,6 +80,9 @@ fun ProfileScreen(
     var showLangDialog by remember { mutableStateOf(false) }
     var splashEnabled by remember { mutableStateOf(com.miolauncher.app.data.UiSettingsStore.showSplash(context)) }
     var appLang by remember { mutableStateOf(com.miolauncher.app.data.UiSettingsStore.appLang(context)) }
+    var pageAnimEnabled by remember { mutableStateOf(com.miolauncher.app.data.UiSettingsStore.pageAnimationEnabled(context)) }
+    var pageAnimMs by remember { mutableStateOf(com.miolauncher.app.data.UiSettingsStore.pageAnimationMs(context)) }
+    var showAnimDurationDialog by remember { mutableStateOf(false) }
 
     // 主页「启动设置」卡片 → 自动打开本页设置
     LaunchedEffect(openLaunchSettings) {
@@ -142,6 +145,13 @@ fun ProfileScreen(
             },
             appLang = appLang,
             onOpenLanguage = { showLangDialog = true },
+            pageAnimEnabled = pageAnimEnabled,
+            onPageAnimChange = {
+                pageAnimEnabled = it
+                com.miolauncher.app.data.UiSettingsStore.setPageAnimationEnabled(context, it)
+            },
+            pageAnimMs = pageAnimMs,
+            onOpenAnimDuration = { showAnimDurationDialog = true },
         )
         Spacer(Modifier.height(16.dp))
         DebugJvmTest()
@@ -313,6 +323,33 @@ fun ProfileScreen(
             },
         )
     }
+
+    if (showAnimDurationDialog) {
+        AlertDialog(
+            onDismissRequest = { showAnimDurationDialog = false },
+            title = { Text("动画时长", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    listOf(150 to "快速（150ms）", 350 to "标准（350ms）", 600 to "缓慢（600ms）", 1000 to "很慢（1000ms）").forEach { (ms, label) ->
+                        androidx.compose.material3.ListItem(
+                            headlineContent = { Text(label, fontWeight = if (pageAnimMs == ms) FontWeight.Bold else FontWeight.Normal) },
+                            trailingContent = if (pageAnimMs == ms) {
+                                { Icon(Icons.Filled.CheckCircle, null, tint = MioGreen) }
+                            } else null,
+                            modifier = Modifier.clickable {
+                                pageAnimMs = ms
+                                com.miolauncher.app.data.UiSettingsStore.setPageAnimationMs(context, ms)
+                                showAnimDurationDialog = false
+                            },
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAnimDurationDialog = false }) { Text("关闭") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -381,6 +418,10 @@ private fun SettingsGroup(
     onSplashChange: (Boolean) -> Unit,
     appLang: String,
     onOpenLanguage: () -> Unit,
+    pageAnimEnabled: Boolean,
+    onPageAnimChange: (Boolean) -> Unit,
+    pageAnimMs: Int,
+    onOpenAnimDuration: () -> Unit,
 ) {
     val ctx = LocalContext.current
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -430,6 +471,26 @@ private fun SettingsGroup(
             if (appLang == "en_us") "English" else "简体中文",
             onClick = onOpenLanguage,
         )
+        SettingRow(
+            Icons.Filled.PlayCircle,
+            "页面切换动画",
+            if (pageAnimEnabled) "已开启 · ${pageAnimMs}ms" else "已关闭",
+            onClick = null,
+            trailing = {
+                androidx.compose.material3.Switch(
+                    checked = pageAnimEnabled,
+                    onCheckedChange = onPageAnimChange,
+                )
+            },
+        )
+        if (pageAnimEnabled) {
+            SettingRow(
+                Icons.Filled.Settings,
+                "动画时长",
+                "${pageAnimMs}ms",
+                onClick = onOpenAnimDuration,
+            )
+        }
         Spacer(Modifier.height(8.dp))
         Text(
             text = com.miolauncher.app.ui.theme.I18n.tr("profile.info"),
