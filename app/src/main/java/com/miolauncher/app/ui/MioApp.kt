@@ -11,9 +11,13 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -232,9 +236,30 @@ fun MioApp() {
                         transitionSpec = {
                             if (pageAnimEnabled) {
                                 val duration = pageAnimMs
-                                val enter = fadeIn(androidx.compose.animation.core.tween(duration)) +
-                                    slideInHorizontally(androidx.compose.animation.core.tween(duration)) { it / 5 }
-                                val exit = fadeOut(androidx.compose.animation.core.tween(duration))
+                                // 绚丽组合：新页面从右侧弹性滑入+缩放弹入+淡入，
+                                // 旧页面向左淡出+轻微缩小
+                                val enter = slideInHorizontally(
+                                    androidx.compose.animation.core.tween(
+                                        duration,
+                                        easing = androidx.compose.animation.core.FastOutSlowInEasing,
+                                    ),
+                                    initialOffsetX = { it / 2 },
+                                ) + fadeIn(androidx.compose.animation.core.tween(duration)) +
+                                    scaleIn(
+                                        initialScale = 0.85f,
+                                        animationSpec = androidx.compose.animation.core.spring(
+                                            dampingRatio = 0.6f,
+                                            stiffness = 300f,
+                                        ),
+                                    )
+                                val exit = slideOutHorizontally(
+                                    androidx.compose.animation.core.tween(duration),
+                                    targetOffsetX = { -it / 3 },
+                                ) + fadeOut(androidx.compose.animation.core.tween(duration)) +
+                                    scaleOut(
+                                        targetScale = 0.9f,
+                                        animationSpec = androidx.compose.animation.core.tween(duration),
+                                    )
                                 enter togetherWith exit
                             } else {
                                 fadeIn() togetherWith fadeOut()
