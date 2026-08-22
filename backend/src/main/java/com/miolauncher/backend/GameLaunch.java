@@ -280,10 +280,27 @@ public final class GameLaunch {
         extra.add("-Dorg.lwjgl.freetype.libname=" + context.getApplicationInfo().nativeLibraryDir + "/libfreetype.so");
         extra.add("-Dorg.lwjgl.spvc.libname=spirv-cross-c-shared");
         // FCL 全套 AWT/Cacio 配置（Caciocavallo 纯 Java AWT，替 Android 提供 java.awt）
-        // Java 8 及更老版本不需要 cacio（用自身 AWT/LWJGL2），且不支持 --add-exports/--add-opens。
+        // Java 8 老版本（B1.0 等）用 LWJGL2 + java.awt 窗口，需要 Java 8 版 cacio
+        // （net.java.openjdk.cacio.ctc.CTCToolkit + -Xbootclasspath/p 前置）。
         // Java 25+：cacio 的 AWT 依赖 libfontmanager 等，在 jre25 上加载失败（bionic namespace），
         // 且 26.x 现代版本用 LWJGL 渲染不依赖 java.awt，故跳过 cacio。
-        if (javaMajor >= 9 && javaMajor < 25) {
+        if (javaMajor < 9) {
+            // Java 8 版 Caciocavallo（net.java.openjdk 包名）
+            File cacio8Dir = new File(runtimeDir, "caciocavallo");
+            File cacioAndroidNw = new File(cacio8Dir, "cacio-androidnw-1.10-SNAPSHOT.jar");
+            File cacioShared8 = new File(cacio8Dir, "cacio-shared-1.10-SNAPSHOT.jar");
+            extra.add("-Djava.awt.headless=false");
+            extra.add("-Dcacio.managed.screensize=" + windowW + "x" + windowH);
+            extra.add("-Dcacio.font.fontmanager=sun.awt.X11FontManager");
+            extra.add("-Dcacio.font.fontscaler=sun.font.FreetypeFontScaler");
+            extra.add("-Dswing.defaultlaf=javax.swing.plaf.metal.MetalLookAndFeel");
+            extra.add("-Dawt.toolkit=net.java.openjdk.cacio.ctc.CTCToolkit");
+            extra.add("-Djava.awt.graphicsenv=net.java.openjdk.cacio.ctc.CTCGraphicsEnvironment");
+            if (cacioAndroidNw.isFile() && cacioShared8.isFile()) {
+                extra.add("-Xbootclasspath/p:" + cacioAndroidNw.getAbsolutePath()
+                        + File.pathSeparator + cacioShared8.getAbsolutePath());
+            }
+        } else if (javaMajor >= 9 && javaMajor < 25) {
             File cacioDir = new File(runtimeDir, "caciocavallo17");
             File cacioAgent = new File(cacioDir, "cacio-agent.jar");
             extra.add("-Djava.awt.headless=false");

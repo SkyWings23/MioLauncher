@@ -96,12 +96,16 @@ public final class JRE {
                 "runtime/lwjgl.jar", "runtime/lwjglx.jar", "runtime/MioLibPatcher.jar", "runtime/MioExitAgent.jar", "runtime/DumpAgent.jar",
                 "runtime/caciocavallo17/cacio-agent.jar",
                 "runtime/caciocavallo17/cacio-shared-1.19.1-SNAPSHOT.jar",
-                "runtime/caciocavallo17/cacio-tta-1.19.1-SNAPSHOT.jar"};
+                "runtime/caciocavallo17/cacio-tta-1.19.1-SNAPSHOT.jar",
+                "runtime/caciocavallo/cacio-androidnw-1.10-SNAPSHOT.jar",
+                "runtime/caciocavallo/cacio-shared-1.10-SNAPSHOT.jar"};
         for (String asset : files) {
             String name = asset.substring(asset.lastIndexOf('/') + 1);
             File out;
             if (asset.startsWith("runtime/caciocavallo17/")) {
                 out = new File(new File(dir, "caciocavallo17"), name);
+            } else if (asset.startsWith("runtime/caciocavallo/")) {
+                out = new File(new File(dir, "caciocavallo"), name);
             } else {
                 out = new File(dir, name);
             }
