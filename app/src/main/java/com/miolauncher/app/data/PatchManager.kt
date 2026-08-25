@@ -35,9 +35,73 @@ object PatchManager {
     /** 局域网候选（服务器主机，平板）；与 cpolar 域名并列兜底。 */
     private const val LAN_ENDPOINTS = "http://192.168.10.41:8787"
 
+    /**
+     * 引导文件（bootstrap）：永不失效的外部锚点。
+     * 由平板/手机服务端定期把当前存活隧道列表写入 GitHub 仓库 mio/endpoints.json，
+     * 客户端经 jsDelivr CDN（国内可达）读取。即使硬编码/持久化域名全部失效，
+     * 也能从这里发现新的随机 cpolar 隧道，解决"自举死锁"。
+     * ?v= 取 5 分钟粒度时间戳，绕过 jsDelivr 的 12h 缓存。
+     */
+    private val BOOTSTRAP_URLS = listOf(
+        "https://cdn.jsdelivr.net/gh/SkyWings23/MioLauncher@main/mio/endpoints.json?v={t}",
+        "https://raw.githubusercontent.com/SkyWings23/MioLauncher/main/mio/endpoints.json?v={t}",
+    )
+
+    /**
+     * 从引导文件拉取当前存活隧道列表（jsDelivr/GitHub raw，永不失效的外部锚点）。
+     * 返回规范化 URL 列表；失败返回空列表（不抛异常）。
+     */
+    fun fetchBootstrapEndpoints(context: Context?): List<String> {
+        val found = ArrayList<String>()
+        try {
+            val ts = System.currentTimeMillis() / 300000L  // 5 分钟粒度，绕过 CDN 缓存
+            for (tpl in BOOTSTRAP_URLS) {
+                try {
+                    val url = tpl.replace("{t}", ts.toString())
+                    val conn = URL(url).openConnection() as HttpURLConnection
+                    conn.connectTimeout = 6000
+                    conn.readTimeout = 6000
+                    conn.setRequestProperty("User-Agent", "MioLauncher/bootstrap")
+                    try {
+                        val code = conn.responseCode
+                        if (code in 200..299) {
+                            val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                            val arr = JSONObject(text).optJSONArray("endpoints")
+                            if (arr != null) {
+                                val fetched = ArrayList<String>()
+                                for (i in 0 until arr.length()) {
+                                    val e = arr.optString(i)
+                                    if (e.isNotBlank()) {
+                                        val norm = if (e.startsWith("http")) e else "https://$e"
+                                        found.add(norm)
+                                        fetched.add(norm)
+                                    }
+                                }
+                                if (fetched.isNotEmpty() && context != null) {
+                                    LogUploader.mergeEndpoints(context, fetched)
+                                }
+                                android.util.Log.i("PatchManager", "bootstrap: ${fetched.size} endpoints from $url")
+                            }
+                        }
+                    } finally {
+                        conn.disconnect()
+                    }
+                    if (found.isNotEmpty()) break  // 任一路径成功即够
+                } catch (_: Exception) {
+                    // 试下一个引导 URL
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return found
+    }
+
     /** 补丁下载域名候选：局域网优先，其次 cpolar 多域名。 */
     private fun patchEndpoints(context: Context): List<String> {
         val merged = LinkedHashSet<String>()
+        // 引导文件优先：永不失效的外部锚点，硬编码/持久化域名全挂时也能发现新隧道。
+        // 失败静默，不影响后续本地/内置域名流程。
+        fetchBootstrapEndpoints(context).forEach { merged.add(it) }
         LAN_ENDPOINTS.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { merged.add(it) }
         LogUploader.endpoints(context).forEach { merged.add(it) }
         // 主动拉取服务器最新隧道列表（含手机/平板多隧道），合并进候选域名。
