@@ -75,6 +75,7 @@ import com.miolauncher.app.ui.screens.HomeScreen
 import com.miolauncher.app.ui.screens.MultiplayerScreen
 import com.miolauncher.app.ui.screens.ProfileScreen
 import com.miolauncher.app.ui.screens.ResourceScreen
+import com.miolauncher.app.ui.theme.MioAccent
 import com.miolauncher.app.ui.theme.MioGreen
 import com.miolauncher.app.ui.theme.MioLauncherTheme
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +107,8 @@ fun MioApp() {
     // 上次游戏崩溃日志（启动时检测，覆盖原生崩溃进程直接死亡的场景）+ 自动诊断
     var crashReport by remember { mutableStateOf<com.miolauncher.app.data.CrashLogManager.CrashReport?>(null) }
     var crashDiagnoses by remember { mutableStateOf<List<com.miolauncher.backend.GameLogAnalyzer.Diagnosis>>(emptyList()) }
+    // 全局新版本更新弹窗（启动时检查，任意页签都会弹出，确保玩家看到）
+    var globalUpdate by remember { mutableStateOf<com.miolauncher.app.data.AppUpdate?>(null) }
     LaunchedEffect(Unit) {
         val hasCrash = withContext(Dispatchers.IO) {
             com.miolauncher.app.data.CrashLogManager.hasUnviewedCrash(context) ||
@@ -143,6 +146,15 @@ fun MioApp() {
                 com.miolauncher.app.data.LogUploader.flushPending(ctx0)
             } catch (_: Exception) {}
         }.start()
+        // 全局检查 App 新版本：发现即弹窗（不依赖玩家停留在主页）
+        try {
+            val update = withContext(Dispatchers.IO) {
+                com.miolauncher.app.data.PatchManager.fetchAppUpdate(context)
+            }
+            if (update != null) {
+                globalUpdate = update
+            }
+        } catch (_: Throwable) {}
         // 游戏内点了"陶瓦联机"按钮 → 切到联机页
         val terracottaSwitch = java.io.File(context.filesDir, "mio/terracotta_switch")
         if (terracottaSwitch.exists()) {
@@ -393,6 +405,25 @@ fun MioApp() {
             )
         }
 
+        // 全局新版本提示弹窗：启动即检查，发现新版本强制展示（点击"更新"进入下载）
+        globalUpdate?.let { up ->
+            GlobalUpdateDialog(
+                update = up,
+                onUpdate = {
+                    val ctx = context
+                    globalUpdate = null
+                    runCatching {
+                        ctx.startActivity(
+                            android.content.Intent(ctx, com.miolauncher.app.PatchDownloadActivity::class.java)
+                                .putExtra("mode", "apk")
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                },
+                onDismiss = { globalUpdate = null },
+            )
+        }
+
         // 启动失败/Java 不兼容 → App 内自定义弹窗（完整展示原因与处理方案）
         launchErrorMsg?.let { msg ->
             AppNoticeDialog(
@@ -493,6 +524,56 @@ MioLauncher 是一款自由、开源的 Minecraft 启动器，提供版本管理
 九、联系方式
 如有疑问，可通过开发者渠道联系（QQ 群等）。
 """.trimIndent()
+
+@Composable
+private fun GlobalUpdateDialog(
+    update: com.miolauncher.app.data.AppUpdate,
+    onUpdate: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        androidx.compose.foundation.layout.Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface, androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+                .padding(22.dp),
+        ) {
+            Text(
+                "发现新版本 v${update.versionName}",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MioAccent,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                update.desc.ifBlank { "包含全新功能与修复，建议立即更新" },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "新版本大小：${"%.1f".format(update.size / 1024.0 / 1024.0)} MB",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(18.dp))
+            androidx.compose.material3.Button(
+                onClick = onUpdate,
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MioGreen),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("立即更新", fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.material3.OutlinedButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("稍后提醒")
+            }
+        }
+    }
+}
 
 @Composable
 private fun AppNoticeDialog(
