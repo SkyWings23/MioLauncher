@@ -16,6 +16,13 @@ import java.net.URL
  * 这些文件在游戏启动前由 extractRuntime() 解压到 files/mio/runtime/，因此只要在
  * extractRuntime 之后、JVM 启动之前用补丁覆盖同名文件即可生效，无需重装 APK。
  */
+/** 增量更新补丁项：从指定基准版本(code) 用 bsdiff 补丁直达最新版。 */
+data class IncrementalPatch(
+    val baseCode: Int,       // 基准版本 code（客户端需持有该版本 APK 副本）
+    val file: String,        // 补丁文件名
+    val size: Long,          // 补丁大小
+)
+
 /** 完整 APK 更新信息（不可热更新的内容通过整包更新下发）。 */
 data class AppUpdate(
     val versionName: String,
@@ -24,6 +31,14 @@ data class AppUpdate(
     val sha256: String,
     val size: Long,
     val desc: String,
+    /** 增量更新（兼容单个补丁）：旧版→新版的 bsdiff 补丁文件名（为空则需完整下载） */
+    val patchFile: String = "",
+    /** 增量更新：补丁的基准版本 code（客户端本地需持有该版本 APK 副本才能用补丁） */
+    val patchBaseCode: Int = 0,
+    /** 增量更新：补丁大小 */
+    val patchSize: Long = 0L,
+    /** 增量更新（多版本直达补丁列表）：客户端按本地持有的 APK 副本版本匹配 */
+    val patchList: List<IncrementalPatch> = emptyList(),
 )
 
 object PatchManager {
@@ -312,6 +327,18 @@ object PatchManager {
                         return null
                     }
                     if (versionCode <= currentCode) return null  // 已是最新
+                    val patchList = ArrayList<IncrementalPatch>()
+                    val patchArr = app.optJSONArray("patchList")
+                    if (patchArr != null) {
+                        for (i in 0 until patchArr.length()) {
+                            val po = patchArr.optJSONObject(i) ?: continue
+                            val base = po.optInt("baseCode", 0)
+                            val file = po.optString("file", "")
+                            if (base > 0 && file.isNotBlank()) {
+                                patchList.add(IncrementalPatch(base, file, po.optLong("size", 0L)))
+                            }
+                        }
+                    }
                     return AppUpdate(
                         versionName = app.optString("versionName", ""),
                         versionCode = versionCode,
@@ -319,6 +346,10 @@ object PatchManager {
                         sha256 = app.optString("sha256", ""),
                         size = app.optLong("size", 0L),
                         desc = app.optString("desc", ""),
+                        patchFile = app.optString("patchFile", ""),
+                        patchBaseCode = app.optInt("patchBaseCode", 0),
+                        patchSize = app.optLong("patchSize", 0L),
+                        patchList = patchList,
                     )
                 }
             } catch (_: Exception) {
@@ -463,23 +494,153 @@ object PatchManager {
         update: AppUpdate,
         onProgress: (Long, Long, Long, Int) -> Unit = { _, _, _, _ -> },
     ): File? {
+        // ---- 增量更新（bsdiff）：本地有匹配的旧 APK 副本且服务器提供补丁 → 只下载补丁（几 MB）----
+        // 优先用多版本补丁列表匹配本地副本；否则回退到单个 patchFile
+        val matchPatch = findMatchPatch(context, update)
+        if (matchPatch != null) {
+            val (oldApk, patch) = matchPatch
+            android.util.Log.i("PatchManager", "增量更新: 本地有旧版(${patch.baseCode}) APK, 下载补丁 ${patch.file} (${patch.size / 1024}KB)")
+            val result = applyIncrementalUpdate(context, update, oldApk, patch.file, patch.size, onProgress)
+            if (result != null) return result
+            android.util.Log.w("PatchManager", "增量更新失败, 回退完整下载")
+        } else if (update.patchFile.isNotBlank() && update.patchBaseCode > 0) {
+            val oldApk = savedApkFile(context, update.patchBaseCode)
+            if (oldApk != null && oldApk.isFile) {
+                android.util.Log.i("PatchManager", "增量更新: 本地有旧版(${update.patchBaseCode}) APK, 下载补丁 ${update.patchFile}")
+                val result = applyIncrementalUpdate(context, update, oldApk, update.patchFile, update.patchSize, onProgress)
+                if (result != null) return result
+                android.util.Log.w("PatchManager", "增量更新失败, 回退完整下载")
+            }
+        }
         // 整体重试：慢隧道导致部分分片失败时，第二次重试（慢隧道已被淘汰）通常成功。
-        // 最多尝试 2 次，避免无限重试拖时间。
+        // 最多尝试 2 次，避免无限重试拖时间。重试时保留 tmp（断点续传）。
         var lastResult: File? = null
         for (attempt in 1..2) {
             if (com.miolauncher.app.UpdateDownloadService.isCancelRequested()) return null
             lastResult = downloadAppApkOnce(context, update, onProgress)
             if (lastResult != null) return lastResult
             if (attempt == 1) {
-                android.util.Log.w("PatchManager", "download attempt $attempt failed, retrying once")
-                // 清掉残留 tmp，干净重试
-                try {
-                    File(context.cacheDir, "mio_update_${update.versionCode}.apk.tmp").delete()
-                } catch (_: Exception) {
-                }
+                android.util.Log.w("PatchManager", "download attempt $attempt failed, retrying once (resume from tmp)")
             }
         }
         return lastResult
+    }
+
+    /** 已保存的指定版本 APK 副本路径（用于增量更新基准），无则返回 null。 */
+    private fun savedApkFile(context: Context, versionCode: Int): File? {
+        val dir = File(context.filesDir, "mio/old_apk")
+        val f = File(dir, "mio_update_$versionCode.apk")
+        return if (f.isFile && f.length() > 0) f else null
+    }
+
+    /** 安装完成后保存一份 APK 副本供下次增量更新使用。 */
+    fun saveApkCopy(context: Context, src: File, versionCode: Int) {
+        try {
+            val dir = File(context.filesDir, "mio/old_apk")
+            dir.mkdirs()
+            val dst = File(dir, "mio_update_$versionCode.apk")
+            src.copyTo(dst, overwrite = true)
+            android.util.Log.i("PatchManager", "已保存 APK 副本 (code $versionCode) 供增量更新")
+            // 清理更旧的副本，只保留最近 3 个（多版本直达补丁需要更多历史副本匹配）
+            val files = dir.listFiles { f -> f.isFile && f.name.startsWith("mio_update_") }
+                ?.sortedByDescending { it.lastModified() } ?: emptyList()
+            for (f in files.drop(3)) f.delete()
+        } catch (e: Exception) {
+            android.util.Log.w("PatchManager", "保存 APK 副本失败", e)
+        }
+    }
+
+    /** 从补丁列表中找到与本地持有副本匹配的补丁（返回副本文件 + 补丁项）。 */
+    private fun findMatchPatch(context: Context, update: AppUpdate): Pair<File, IncrementalPatch>? {
+        // 先试多版本补丁列表（优先匹配，跨度大）
+        for (p in update.patchList) {
+            val oldApk = savedApkFile(context, p.baseCode)
+            if (oldApk != null && oldApk.isFile) return oldApk to p
+        }
+        return null
+    }
+
+    /**
+     * 增量更新：下载 bsdiff 补丁 → 本地用旧 APK 还原出新 APK → SHA 校验。
+     * 成功后返回新 APK 文件；失败返回 null（调用方回退完整下载）。
+     */
+    private fun applyIncrementalUpdate(
+        context: Context,
+        update: AppUpdate,
+        oldApk: File,
+        patchFileName: String,
+        patchFileSize: Long,
+        onProgress: (Long, Long, Long, Int) -> Unit,
+    ): File? {
+        try {
+            // 1. 下载补丁（多隧道候选，单次 Range 完整下载——补丁很小）
+            val dest = File(context.cacheDir, "mio_update_${update.versionCode}.apk")
+            val patchFile = File(context.cacheDir, "mio_patch_${update.versionCode}.diff")
+            var downloaded = false
+            for (base in patchEndpoints(context)) {
+                try {
+                    val conn = URL("$base/api/patches/$patchFileName").openConnection() as HttpURLConnection
+                    conn.requestMethod = "GET"
+                    conn.connectTimeout = 10000
+                    conn.readTimeout = 15000
+                    conn.setRequestProperty("Authorization", authHeader())
+                    conn.setRequestProperty("User-Agent", "MioLauncher/updater")
+                    val code = conn.responseCode
+                    if (code !in 200..299) continue
+                    val total = conn.contentLengthLong
+                    val input = conn.inputStream
+                    val tmp = File(patchFile.parentFile, patchFile.name + ".tmp")
+                    tmp.outputStream().use { out ->
+                        val buf = ByteArray(65536)
+                        var written = 0L
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            written += n
+                            onProgress(written, if (total > 0) total else patchFileSize, 0L, 0)
+                        }
+                    }
+                    input.close()
+                    if (tmp.renameTo(patchFile)) {
+                        downloaded = true
+                        break
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("PatchManager", "补丁下载失败 $base", e)
+                }
+            }
+            if (!downloaded) {
+                android.util.Log.w("PatchManager", "补丁下载失败, 回退完整下载")
+                return null
+            }
+
+            // 2. bspatch 还原
+            onProgress(0, update.size, 0L, 1)
+            val tmpNew = File(dest.parentFile, dest.name + ".tmp")
+            if (tmpNew.exists()) tmpNew.delete()
+            Bspatch.apply(oldApk, tmpNew, patchFile)
+            android.util.Log.i("PatchManager", "bspatch 还原完成: ${tmpNew.length()} bytes")
+
+            // 3. SHA256 校验
+            if (update.sha256.isNotBlank()) {
+                val actual = sha256File(tmpNew)
+                if (!actual.equals(update.sha256, ignoreCase = true)) {
+                    android.util.Log.w("PatchManager", "增量更新 SHA 不符: $actual vs ${update.sha256}")
+                    tmpNew.delete()
+                    return null
+                }
+            }
+            // 4. 完成
+            onProgress(update.size, update.size, 0L, 100)
+            if (tmpNew.renameTo(dest) || (dest.exists() && dest.delete() && tmpNew.renameTo(dest))) {
+                return dest
+            }
+            return null
+        } catch (e: Exception) {
+            android.util.Log.w("PatchManager", "增量更新异常, 回退完整下载", e)
+            return null
+        }
     }
 
     private fun downloadAppApkOnce(
@@ -548,11 +709,15 @@ object PatchManager {
             // 注意：每分片下载时间 = 分片大小 / 隧道速率(~130KB/s)，必须给足分片超时。
             val threads = useEndpoints.size.coerceIn(4, 16)
             val chunk = (total / threads) + 1
-            // 干净的临时文件：分片各自从头写，避免上次残留脏数据。
-            if (tmp.exists()) tmp.delete()
-            tmp.createNewFile()
+            // 断点续传：不清空临时文件，跳过 tmp 中已写满的字节（退出/中断后下次从断点继续）。
+            // tmp 大小即已下载的连续前缀长度（分片写入是稀疏的，但安全起见只信任文件实际大小）。
+            val resumeFrom = if (tmp.isFile && tmp.length() > 0) tmp.length() else 0L
+            if (!tmp.exists()) tmp.createNewFile()
+            if (resumeFrom > 0) {
+                android.util.Log.i("PatchManager", "resume from $resumeFrom/${total} (${resumeFrom * 100 / total}%)")
+            }
             val startMs = System.currentTimeMillis()
-            var downloadedAtomic = java.util.concurrent.atomic.AtomicLong(0L)
+            var downloadedAtomic = java.util.concurrent.atomic.AtomicLong(resumeFrom)
             val completed = java.util.concurrent.atomic.AtomicInteger(0)
             val pool = java.util.concurrent.Executors.newFixedThreadPool(threads)
             val tasks = ArrayList<java.util.concurrent.Future<*>>()
@@ -560,7 +725,7 @@ object PatchManager {
             // 下载中的失败分片范围（并发安全），全部完成后用稳定通道补齐
             val failedChunks = java.util.concurrent.ConcurrentLinkedQueue<LongArray>()
             for (t in 0 until threads) {
-                val start = t * chunk
+                val start = maxOf(t * chunk, resumeFrom)  // 跳过已下载前缀
                 val end = minOf((t + 1) * chunk - 1, total - 1)
                 if (start >= total) continue
                 // 分片轮询分配隧道：t=0→ep0, t=1→ep1, ... 突破单隧道限速
@@ -595,7 +760,9 @@ object PatchManager {
                                     val input = conn.inputStream
                                     val buf = ByteArray(128 * 1024)
                                     var localPos = pos
-                                    while (localPos <= blockEnd && System.currentTimeMillis() < chunkDeadline) {
+                                    // 块级硬超时：防止 read() 半开连接无限阻塞导致"卡住"
+                                    val blockDeadline = System.currentTimeMillis() + 15000L
+                                    while (localPos <= blockEnd && System.currentTimeMillis() < blockDeadline) {
                                         if (com.miolauncher.app.UpdateDownloadService.isCancelRequested()) break
                                         val remaining = blockEnd - localPos + 1
                                         val want = minOf(buf.size, remaining.toInt())
@@ -612,7 +779,7 @@ object PatchManager {
                                         pos = localPos
                                         break
                                     }
-                                    // 块未满：重试（pos 从 localPos 继续）
+                                    // 块未满（超时或断流）：重试（pos 从 localPos 继续）
                                     pos = localPos
                                 } catch (_: Exception) {
                                 } finally {
@@ -650,11 +817,14 @@ object PatchManager {
             while (completed.get() < tasks.size) {
                 if (com.miolauncher.app.UpdateDownloadService.isCancelRequested()) {
                     pool.shutdownNow()
+                    // 保留 tmp 供下次断点续传
+                    android.util.Log.w("PatchManager", "download cancelled, keeping tmp ${tmp.length()} bytes for resume")
                     return null
                 }
                 if (System.currentTimeMillis() > waitDeadline) {
-                    android.util.Log.w("PatchManager", "download timed out, ${completed.get()}/${tasks.size} chunks done")
+                    android.util.Log.w("PatchManager", "download timed out, ${completed.get()}/${tasks.size} chunks done, keeping tmp ${tmp.length()} bytes")
                     pool.shutdownNow()
+                    // 保留 tmp 供下次断点续传
                     return null
                 }
                 val done = downloadedAtomic.get()
@@ -696,7 +866,9 @@ object PatchManager {
                                 val input = conn.inputStream
                                 val buf = ByteArray(128 * 1024)
                                 var localPos = pos
-                                while (localPos <= blockEnd) {
+                                // repair 也加块级硬超时防卡住
+                                val repairDeadline = System.currentTimeMillis() + 15000L
+                                while (localPos <= blockEnd && System.currentTimeMillis() < repairDeadline) {
                                     val remaining = blockEnd - localPos + 1
                                     val want = minOf(buf.size, remaining.toInt())
                                     val read = input.read(buf, 0, want)
@@ -747,8 +919,8 @@ object PatchManager {
     private fun openRange(base: String, start: Long, end: Long): HttpURLConnection {
         val conn = URL("$base/api/app/latest.apk").openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
-        conn.connectTimeout = 10000
-        conn.readTimeout = 15000
+        conn.connectTimeout = 8000
+        conn.readTimeout = 8000
         conn.setRequestProperty("Authorization", authHeader())
         conn.setRequestProperty("User-Agent", "MioLauncher/updater")
         conn.setRequestProperty("Range", "bytes=$start-$end")

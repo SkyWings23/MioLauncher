@@ -21,8 +21,8 @@ android {
         applicationId = "com.miolauncher.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 18
-        versionName = "0.1.4-12"
+        versionCode = 20
+        versionName = "0.1.4-14"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
@@ -78,6 +78,7 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
     implementation(project(":core"))
     implementation(project(":backend"))
+    implementation("org.apache.commons:commons-compress:1.27.1")
     implementation(files("libs/exp4j-0.4.9-SNAPSHOT.jar"))
 
     val composeBom = platform("androidx.compose:compose-bom:2024.09.03")

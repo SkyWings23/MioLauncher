@@ -86,6 +86,11 @@ class PatchDownloadActivity : ComponentActivity() {
 
         /** 调起系统安装器安装下载好的 APK（FileProvider 暴露，授予读取权限）。 */
         fun installApk(context: Context, apkFile: java.io.File): Boolean {
+            // 安装前保存一份副本供下次增量更新（bsdiff 需要旧 APK 做基准）
+            val code = apkFile.name.removePrefix("mio_update_").removeSuffix(".apk").toIntOrNull()
+            if (code != null) {
+                com.miolauncher.app.data.PatchManager.saveApkCopy(context, apkFile, code)
+            }
             return try {
                 val uri = androidx.core.content.FileProvider.getUriForFile(
                     context,
