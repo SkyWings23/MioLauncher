@@ -47,6 +47,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,8 +85,17 @@ fun HomeScreen(
     var showVersionSettingsDialog by remember { mutableStateOf(false) }
     var patchStatus by remember { mutableStateOf<Pair<String, String>>(Pair("", "")) }  // (提示, 目标target)
     var appUpdate by remember { mutableStateOf<com.miolauncher.app.data.AppUpdate?>(null) }
+    // 是否已完成首次加载（切页回来不重复拉取版本列表/补丁）
+    var loadedOnce by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
+        // 首次进入主页才加载；切到其他页再回来直接用缓存/已加载状态，避免重复联网卡顿
+        if (loadedOnce) {
+            appUpdate = com.miolauncher.app.data.PatchManager.fetchAppUpdateCached()
+            loading = false
+            return@LaunchedEffect
+        }
+        loadedOnce = true
         withContext(Dispatchers.IO) {
             try {
                 val repo = MioRepository(context)
@@ -104,15 +114,12 @@ fun HomeScreen(
                 }
             } catch (_: Throwable) {
             }
-            // 检查完整 APK 更新（新版本）
-            try {
-                val update = com.miolauncher.app.data.PatchManager.fetchAppUpdate(context)
-                if (update != null) {
-                    withContext(Dispatchers.Main) {
-                        appUpdate = update
-                    }
+            // 检查完整 APK 更新：直接用启动时缓存的检查结果（不重复联网）
+            val update = com.miolauncher.app.data.PatchManager.fetchAppUpdateCached()
+            if (update != null) {
+                withContext(Dispatchers.Main) {
+                    appUpdate = update
                 }
-            } catch (_: Throwable) {
             }
         }
         loading = false

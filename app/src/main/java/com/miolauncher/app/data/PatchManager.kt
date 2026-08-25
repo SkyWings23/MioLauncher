@@ -32,6 +32,40 @@ object PatchManager {
     private const val KEY_INSTALLED = "installed"  // JSON: {"<target>": "<version>"}
     private const val KEY_SKIPPED = "skipped"       // JSON: ["<target>..."] 用户点"忽略"的
 
+    /**
+     * App 进程内共享的更新检查缓存：启动时（开机动画期间）检查一次并缓存，
+     * 所有页面/组件复用，避免切页后重新拉取版本导致重复加载。
+     * null = 尚未检查；非 null = 已检查（无更新时为特殊"无更新"标记）。
+     */
+    @Volatile
+    private var cachedAppUpdate: AppUpdate? = null
+    private val updateCheckLock = Any()
+
+    /**
+     * 检查 App 更新（进程内只查一次，结果缓存）。
+     * 启动时调用一次即可，后续 fetchAppUpdateCached() 直接返回缓存结果。
+     */
+    fun checkAppUpdateOnce(context: Context) {
+        if (cachedAppUpdate != null) return
+        synchronized(updateCheckLock) {
+            if (cachedAppUpdate != null) return
+            try {
+                cachedAppUpdate = fetchAppUpdate(context)
+            } catch (_: Throwable) {
+                cachedAppUpdate = AppUpdate("", 0, "", "", 0L, "")  // 无更新标记
+            }
+        }
+    }
+
+    /** 返回已缓存的更新信息；null 表示无更新或未检查。 */
+    fun fetchAppUpdateCached(): AppUpdate? =
+        cachedAppUpdate?.takeIf { it.versionCode > 0 }
+
+    /** 清除缓存（供调试/重试） */
+    fun clearUpdateCache() {
+        cachedAppUpdate = null
+    }
+
     /** 局域网候选（服务器主机，平板）；与 cpolar 域名并列兜底。 */
     private const val LAN_ENDPOINTS = "http://192.168.10.41:8787"
 

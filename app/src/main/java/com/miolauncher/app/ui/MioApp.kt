@@ -146,15 +146,16 @@ fun MioApp() {
                 com.miolauncher.app.data.LogUploader.flushPending(ctx0)
             } catch (_: Exception) {}
         }.start()
-        // 全局检查 App 新版本：发现即弹窗（不依赖玩家停留在主页）
-        try {
-            val update = withContext(Dispatchers.IO) {
-                com.miolauncher.app.data.PatchManager.fetchAppUpdate(context)
-            }
-            if (update != null) {
-                globalUpdate = update
-            }
-        } catch (_: Throwable) {}
+        // 全局检查 App 新版本：开机动画期间就开始拉取（checkAppUpdateOnce 缓存结果），
+        // splash 结束后立即有结果弹窗，不等待页面加载。
+        Thread {
+            try {
+                com.miolauncher.app.data.PatchManager.checkAppUpdateOnce(context)
+                // 检查到新版本 → 直接设置全局弹窗状态
+                val u = com.miolauncher.app.data.PatchManager.fetchAppUpdateCached()
+                if (u != null) globalUpdate = u
+            } catch (_: Throwable) {}
+        }.start()
         // 游戏内点了"陶瓦联机"按钮 → 切到联机页
         val terracottaSwitch = java.io.File(context.filesDir, "mio/terracotta_switch")
         if (terracottaSwitch.exists()) {
