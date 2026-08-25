@@ -77,26 +77,51 @@ object LogUploader {
      * @return 查看链接；未缓存且失败返回 null，已缓存则返回特殊标记
      */
     fun upload(logText: String, device: String, version: String, context: Context? = null): String? {
-        val candidates = endpoints(context)
-        for (base in candidates) {
+        // 候选排序：引导文件发现的活隧道优先（最新），本地持久化+内置兜底。
+        // 避免串行尝试大量死隧道导致上传超时（崩溃日志传不上去）。
+        val candidates = LinkedHashSet<String>()
+        if (context != null) {
+            runCatching { com.miolauncher.app.data.PatchManager.fetchBootstrapEndpoints(context) }
+                .getOrNull()?.forEach { candidates.add(it) }
+        }
+        candidates.addAll(endpoints(context))
+
+        // 并行测活：只保留能连上的隧道（探测用 /api/endpoints，POST 校验待正式上传），
+        // 缩短超时，快速找到可用上传通道，避免逐个等死隧道超时。
+        val alive = java.util.Collections.synchronizedList(ArrayList<String>())
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(minOf(candidates.size, 8))
+        val futures = candidates.map { base ->
+            pool.submit {
+                try {
+                    val c = URL("$base/api/endpoints").openConnection() as HttpURLConnection
+                    c.requestMethod = "GET"
+                    c.connectTimeout = 4000
+                    c.readTimeout = 4000
+                    c.setRequestProperty(
+                        "Authorization",
+                        "Basic " + android.util.Base64.encodeToString(
+                            "$BASIC_USER:$BASIC_PASS".toByteArray(Charsets.UTF_8),
+                            android.util.Base64.NO_WRAP,
+                        ),
+                    )
+                    val code = c.responseCode
+                    if (code in 200..299) alive.add(base)
+                    c.disconnect()
+                } catch (_: Exception) {
+                }
+            }
+        }
+        futures.forEach { runCatching { it.get() } }
+        pool.shutdown()
+
+        // 按存活顺序正式上传（单次 POST，避免多隧道重复记录）
+        val ordered = (alive + candidates).distinct()
+        for (base in ordered) {
             try {
                 val view = uploadOnce(base, logText, device, version, context)
                 if (view != null) return view
             } catch (_: Exception) {
-                // 尝试下一个域名
-            }
-        }
-        // 全部候选失败：尝试引导文件发现新隧道（硬编码/持久化域名全失效时的自愈）
-        if (context != null) {
-            val discovered = com.miolauncher.app.data.PatchManager.fetchBootstrapEndpoints(context)
-            if (discovered.isNotEmpty()) {
-                for (base in discovered) {
-                    try {
-                        val view = uploadOnce(base, logText, device, version, null)
-                        if (view != null) return view
-                    } catch (_: Exception) {
-                    }
-                }
+                // 尝试下一个
             }
         }
         // 全部失败 → 本地缓存，待下次补发
@@ -181,8 +206,8 @@ object LogUploader {
 
         val conn = URL("$base/api/upload").openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
-        conn.connectTimeout = 15000
-        conn.readTimeout = 20000
+        conn.connectTimeout = 8000
+        conn.readTimeout = 10000
         conn.doOutput = true
         conn.setRequestProperty("Content-Type", "application/json")
         conn.setRequestProperty("X-Auth", UPLOAD_TOKEN)

@@ -66,6 +66,14 @@ object PatchManager {
         cachedAppUpdate = null
     }
 
+    /**
+     * endpoint 列表进程内缓存：App 生命周期内只完整探测一次，
+     * 避免每次打开更新中心/检查更新都串行探测所有隧道导致卡顿。
+     */
+    @Volatile
+    private var cachedEndpoints: List<String>? = null
+    private val endpointLock = Any()
+
     /** 局域网候选（服务器主机，平板）；与 cpolar 域名并列兜底。 */
     private const val LAN_ENDPOINTS = "http://192.168.10.41:8787"
 
@@ -86,45 +94,48 @@ object PatchManager {
      * 返回规范化 URL 列表；失败返回空列表（不抛异常）。
      */
     fun fetchBootstrapEndpoints(context: Context?): List<String> {
-        val found = ArrayList<String>()
+        val found = java.util.Collections.synchronizedList(ArrayList<String>())
         try {
             val ts = System.currentTimeMillis() / 300000L  // 5 分钟粒度，绕过 CDN 缓存
-            for (tpl in BOOTSTRAP_URLS) {
-                try {
-                    val url = tpl.replace("{t}", ts.toString())
-                    val conn = URL(url).openConnection() as HttpURLConnection
-                    conn.connectTimeout = 6000
-                    conn.readTimeout = 6000
-                    conn.setRequestProperty("User-Agent", "MioLauncher/bootstrap")
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
+            val futures = BOOTSTRAP_URLS.map { tpl ->
+                pool.submit {
                     try {
-                        val code = conn.responseCode
-                        if (code in 200..299) {
-                            val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                            val arr = JSONObject(text).optJSONArray("endpoints")
-                            if (arr != null) {
-                                val fetched = ArrayList<String>()
-                                for (i in 0 until arr.length()) {
-                                    val e = arr.optString(i)
-                                    if (e.isNotBlank()) {
-                                        val norm = if (e.startsWith("http")) e else "https://$e"
-                                        found.add(norm)
-                                        fetched.add(norm)
+                        val url = tpl.replace("{t}", ts.toString())
+                        val conn = URL(url).openConnection() as HttpURLConnection
+                        conn.connectTimeout = 3000
+                        conn.readTimeout = 3000
+                        conn.setRequestProperty("User-Agent", "MioLauncher/bootstrap")
+                        try {
+                            val code = conn.responseCode
+                            if (code in 200..299) {
+                                val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                                val arr = JSONObject(text).optJSONArray("endpoints")
+                                if (arr != null) {
+                                    val fetched = ArrayList<String>()
+                                    for (i in 0 until arr.length()) {
+                                        val e = arr.optString(i)
+                                        if (e.isNotBlank()) {
+                                            val norm = if (e.startsWith("http")) e else "https://$e"
+                                            found.add(norm)
+                                            fetched.add(norm)
+                                        }
                                     }
+                                    if (fetched.isNotEmpty() && context != null) {
+                                        LogUploader.mergeEndpoints(context, fetched)
+                                    }
+                                    android.util.Log.i("PatchManager", "bootstrap: ${fetched.size} endpoints from $url")
                                 }
-                                if (fetched.isNotEmpty() && context != null) {
-                                    LogUploader.mergeEndpoints(context, fetched)
-                                }
-                                android.util.Log.i("PatchManager", "bootstrap: ${fetched.size} endpoints from $url")
                             }
+                        } finally {
+                            conn.disconnect()
                         }
-                    } finally {
-                        conn.disconnect()
+                    } catch (_: Exception) {
                     }
-                    if (found.isNotEmpty()) break  // 任一路径成功即够
-                } catch (_: Exception) {
-                    // 试下一个引导 URL
                 }
             }
+            futures.forEach { runCatching { it.get() } }
+            pool.shutdown()
         } catch (_: Exception) {
         }
         return found
@@ -132,6 +143,18 @@ object PatchManager {
 
     /** 补丁下载域名候选：局域网优先，其次 cpolar 多域名。 */
     private fun patchEndpoints(context: Context): List<String> {
+        // 进程内缓存：启动后首次完整探测一次，后续直接复用，避免重复串行探测卡顿
+        cachedEndpoints?.let { return it }
+        synchronized(endpointLock) {
+            cachedEndpoints?.let { return it }
+            val result = buildEndpoints(context)
+            cachedEndpoints = result
+            return result
+        }
+    }
+
+    /** 构建 endpoint 候选列表（引导文件 + 局域网 + 本地持久化 + 服务器注册表）。 */
+    private fun buildEndpoints(context: Context): List<String> {
         val merged = LinkedHashSet<String>()
         // 引导文件优先：永不失效的外部锚点，硬编码/持久化域名全挂时也能发现新隧道。
         // 失败静默，不影响后续本地/内置域名流程。
@@ -139,46 +162,55 @@ object PatchManager {
         LAN_ENDPOINTS.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { merged.add(it) }
         LogUploader.endpoints(context).forEach { merged.add(it) }
         // 主动拉取服务器最新隧道列表（含手机/平板多隧道），合并进候选域名。
-        // 服务器 /api/endpoints 返回当前存活的全部隧道，保证新增隧道即时可用。
-        // 关键：拉取到的列表持久化（mergeEndpoints），平板重启域名变化后，
-        // App 用已存的稳定手机隧道域名重新发现平板新隧道。
+        // 并行探测所有已知域名，取最快成功的响应，避免串行等待拖慢启动。
         try {
-            for (probe in merged.toList()) {
-                val conn = URL("$probe/api/endpoints").openConnection() as HttpURLConnection
-                conn.requestMethod = "GET"
-                conn.connectTimeout = 6000
-                conn.readTimeout = 6000
-                try {
-                    conn.setRequestProperty(
-                        "Authorization",
-                        "Basic " + Base64.encodeToString(
-                            "${LogUploader.BASIC_USER}:${LogUploader.BASIC_PASS}".toByteArray(Charsets.UTF_8),
-                            Base64.NO_WRAP,
-                        ),
-                    )
-                    val code = conn.responseCode
-                    if (code in 200..299) {
-                        val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                        val arr = JSONObject(text).optJSONArray("endpoints")
-                        if (arr != null) {
-                            val fetched = ArrayList<String>()
-                            for (i in 0 until arr.length()) {
-                                val e = arr.optString(i)
-                                if (e.isNotBlank()) {
-                                    val norm = if (e.startsWith("http")) e else "http://$e"
-                                    merged.add(norm)
-                                    fetched.add(norm)
+            val probeList = merged.toList()
+            val lock = java.util.concurrent.atomic.AtomicBoolean(false)
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(minOf(probeList.size, 8))
+            val futures = probeList.map { ep ->
+                pool.submit {
+                    if (lock.get()) return@submit
+                    var conn: HttpURLConnection? = null
+                    try {
+                        conn = URL("$ep/api/endpoints").openConnection() as HttpURLConnection
+                        conn.requestMethod = "GET"
+                        conn.connectTimeout = 3000
+                        conn.readTimeout = 3000
+                        conn.setRequestProperty(
+                            "Authorization",
+                            "Basic " + Base64.encodeToString(
+                                "${LogUploader.BASIC_USER}:${LogUploader.BASIC_PASS}".toByteArray(Charsets.UTF_8),
+                                Base64.NO_WRAP,
+                            ),
+                        )
+                        val code = conn.responseCode
+                        if (code in 200..299) {
+                            val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                            val arr = JSONObject(text).optJSONArray("endpoints")
+                            if (arr != null && lock.compareAndSet(false, true)) {
+                                val fetched = ArrayList<String>()
+                                for (i in 0 until arr.length()) {
+                                    val e = arr.optString(i)
+                                    if (e.isNotBlank()) {
+                                        val norm = if (e.startsWith("http")) e else "https://$e"
+                                        synchronized(merged) {
+                                            merged.add(norm)
+                                        }
+                                        fetched.add(norm)
+                                    }
                                 }
+                                // 持久化本次拉取到的全部隧道域名，供下次启动/平板重启后复用
+                                if (fetched.isNotEmpty()) LogUploader.mergeEndpoints(context, fetched)
                             }
-                            // 持久化本次拉取到的全部隧道域名，供下次启动/平板重启后复用
-                            LogUploader.mergeEndpoints(context, fetched)
                         }
+                    } catch (_: Exception) {
+                    } finally {
+                        conn?.disconnect()
                     }
-                } finally {
-                    conn.disconnect()
                 }
-                if (merged.size >= 24) break
             }
+            futures.forEach { runCatching { it.get() } }
+            pool.shutdown()
         } catch (_: Exception) {
         }
         // 过滤对客户端永远无效的地址：127.0.0.1 / localhost 指向客户端自身，公网玩家也连不上 192.168 局域网。

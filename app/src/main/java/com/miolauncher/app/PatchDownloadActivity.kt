@@ -134,10 +134,11 @@ private fun PatchDownloadScreen(activity: PatchDownloadActivity, mode: String = 
 
     LaunchedEffect(Unit) {
         if (isApk) {
-            // ---- APK 更新模式：先拉取更新信息展示日志，用户确认后再下载 ----
+            // ---- APK 更新模式：优先用启动时缓存的更新信息，没有再联网拉取 ----
             val update = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 try {
-                    PatchManager.fetchAppUpdate(context)
+                    com.miolauncher.app.data.PatchManager.fetchAppUpdateCached()
+                        ?: com.miolauncher.app.data.PatchManager.fetchAppUpdate(context)
                 } catch (_: Throwable) {
                     null
                 }
