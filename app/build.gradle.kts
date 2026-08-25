@@ -4,6 +4,15 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+import java.util.Properties
+
+// 签名配置：keystore/mio-release.jks 由项目内 key.properties 引用（不入库，本地保存）。
+// 该 keystore 由 debug.keystore 复制而来，保证与已分发版本签名一致（玩家可覆盖更新）。
+val keyProps = Properties().apply {
+    val f = rootProject.file("key.properties")
+    if (f.exists()) f.inputStream().use { this.load(it) }
+}
+
 android {
     namespace = "com.miolauncher.app"
     compileSdk = 34
@@ -12,11 +21,22 @@ android {
         applicationId = "com.miolauncher.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.1.3-1"
+        versionCode = 12
+        versionName = "0.1.4-6"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            if (keyProps["storeFile"] != null) {
+                storeFile = file(keyProps["storeFile"] as String)
+                storePassword = keyProps["storePassword"] as String
+                keyAlias = keyProps["keyAlias"] as String
+                keyPassword = keyProps["keyPassword"] as String
+            }
         }
     }
 
@@ -24,6 +44,11 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = if (keyProps["storeFile"] != null) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
+        }
+        debug {
+            // debug 也统一用正式 keystore，确保任何构建产物签名一致
+            signingConfig = if (keyProps["storeFile"] != null) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
         }
     }
 

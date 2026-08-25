@@ -4,6 +4,8 @@ import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.scale
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -52,6 +55,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.miolauncher.app.data.GameVersion
 import com.miolauncher.app.data.GameVersionType
 import com.miolauncher.app.data.GameLauncher
@@ -78,6 +82,8 @@ fun HomeScreen(
     var showSwitcher by remember { mutableStateOf(false) }
     var showOfflineDialog by remember { mutableStateOf(false) }
     var showVersionSettingsDialog by remember { mutableStateOf(false) }
+    var patchStatus by remember { mutableStateOf<Pair<String, String>>(Pair("", "")) }  // (提示, 目标target)
+    var appUpdate by remember { mutableStateOf<com.miolauncher.app.data.AppUpdate?>(null) }
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
@@ -85,8 +91,53 @@ fun HomeScreen(
                 val repo = MioRepository(context)
                 installedVersions = repo.loadInstalledVersions()
             } catch (_: Throwable) {}  // 用 Throwable：HMCL 库可能抛 Error（VerifyError 等），Exception 捕获不到
+            // 检查热更新补丁（静默，不打断界面）
+            try {
+                val manifest = com.miolauncher.app.data.PatchManager.fetchManifest(context)
+                val pending = com.miolauncher.app.data.PatchManager.pendingPatches(context, manifest)
+                if (pending.isNotEmpty()) {
+                    val p = pending.first()
+                    val target = p.optString("target")
+                    withContext(Dispatchers.Main) {
+                        patchStatus = Pair(p.optString("desc", "发现可用补丁"), target)
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+            // 检查完整 APK 更新（新版本）
+            try {
+                val update = com.miolauncher.app.data.PatchManager.fetchAppUpdate(context)
+                if (update != null) {
+                    withContext(Dispatchers.Main) {
+                        appUpdate = update
+                    }
+                }
+            } catch (_: Throwable) {
+            }
         }
         loading = false
+    }
+
+    // 补丁安装：切到全屏下载界面（进度/速度/大小，完成后可重启）
+    fun installPatch() {
+        val intent = android.content.Intent(context, com.miolauncher.app.PatchDownloadActivity::class.java)
+            .putExtra("mode", "patch")
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+    }
+
+    // 完整 APK 更新：切到全屏下载界面（下载完成后调起系统安装器）
+    fun updateApp() {
+        val intent = android.content.Intent(context, com.miolauncher.app.PatchDownloadActivity::class.java)
+            .putExtra("mode", "apk")
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+    }
+
+    fun dismissPatch() {
+        val (_, target) = patchStatus
+        if (target.isNotBlank()) com.miolauncher.app.data.PatchManager.skipPatch(context, target)
+        patchStatus = Pair("", "")
     }
 
     val selectedVersion = installedVersions.firstOrNull { it.id == selectedVersionId }
@@ -116,6 +167,77 @@ fun HomeScreen(
         Spacer(Modifier.height(8.dp))
         WelcomeBanner()
         Spacer(Modifier.height(16.dp))
+
+        if (patchStatus.first.isNotBlank()) {
+            androidx.compose.material3.Surface(
+                color = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                androidx.compose.foundation.layout.Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    androidx.compose.foundation.layout.Box(Modifier.weight(1f)) {
+                        androidx.compose.material3.Text(
+                            text = patchStatus.first,
+                            fontSize = 13.sp,
+                            color = androidx.compose.material3.MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
+                    if (patchStatus.second.isNotBlank()) {
+                        androidx.compose.material3.TextButton(onClick = { installPatch() }) {
+                            androidx.compose.material3.Text("安装")
+                        }
+                        androidx.compose.material3.TextButton(onClick = { dismissPatch() }) {
+                            androidx.compose.material3.Text("忽略")
+                        }
+                    } else if (patchStatus.first.contains("完成") || patchStatus.first.contains("失败")) {
+                        androidx.compose.material3.TextButton(onClick = { patchStatus = Pair("", "") }) {
+                            androidx.compose.material3.Text("知道了")
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+
+        // 完整 APK 更新提示（不可热更新的内容 → 整包更新，样式与补丁区分）
+        appUpdate?.let { up ->
+            androidx.compose.material3.Surface(
+                color = com.miolauncher.app.ui.theme.MioAccent.copy(alpha = 0.18f),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                androidx.compose.foundation.layout.Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    androidx.compose.foundation.layout.Box(Modifier.weight(1f)) {
+                        Column {
+                            Text(
+                                text = "发现新版本 v${up.versionName}",
+                                fontSize = 14.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                color = com.miolauncher.app.ui.theme.MioAccent,
+                            )
+                            Text(
+                                text = up.desc.ifBlank { "包含全新功能与修复" },
+                                fontSize = 12.sp,
+                                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    androidx.compose.material3.TextButton(onClick = { updateApp() }) {
+                        androidx.compose.material3.Text("更新", color = com.miolauncher.app.ui.theme.MioAccent)
+                    }
+                    androidx.compose.material3.TextButton(onClick = { appUpdate = null }) {
+                        androidx.compose.material3.Text("忽略")
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
 
         VersionCard(
             version = selectedVersion,
@@ -343,6 +465,16 @@ private fun VersionCard(
                 }
                 if (version != null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        // 点击回弹：按下缩放 0.94，松手弹簧回弹到 1
+                        val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                        val isPressed by interaction.collectIsPressedAsState()
+                        val scale by androidx.compose.animation.core.animateFloatAsState(
+                            targetValue = if (isPressed) 0.94f else 1f,
+                            animationSpec = androidx.compose.animation.core.spring(
+                                dampingRatio = 0.45f, stiffness = 400f,
+                            ),
+                            label = "playBounce",
+                        )
                         Button(
                             onClick = onPlayClick,
                             colors = ButtonDefaults.buttonColors(containerColor = MioGreen),
@@ -350,6 +482,8 @@ private fun VersionCard(
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(
                                 horizontal = 20.dp, vertical = 12.dp,
                             ),
+                            interactionSource = interaction,
+                            modifier = Modifier.scale(scale),
                         ) {
                             Icon(
                                 Icons.Filled.PlayArrow,

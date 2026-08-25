@@ -65,6 +65,7 @@ object I18n {
         "dl.tab_worlds" to ("地图" to "Worlds"),
         "dl.tab_modpacks" to ("整合包" to "Modpacks"),
         "dl.search_mods" to ("搜索模组（Modrinth）" to "Search mods (Modrinth)"),
+        "dl.search_modpacks" to ("搜索整合包（Modrinth）" to "Search modpacks (Modrinth)"),
         "dl.search" to ("搜索" to "Search"),
         "dl.all" to ("全部" to "All"),
         "dl.load_more" to ("加载更多" to "Load more"),
