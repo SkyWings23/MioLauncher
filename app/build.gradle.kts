@@ -21,8 +21,8 @@ android {
         applicationId = "com.miolauncher.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 12
-        versionName = "0.1.4-6"
+        versionCode = 13
+        versionName = "0.1.4-7"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")

@@ -197,7 +197,8 @@ object PatchManager {
         return null
     }
 
-    /** 计算需要下载/更新的补丁列表（未安装、或已装版本低于服务器版本）。 */    fun pendingPatches(context: Context, manifest: List<JSONObject>): List<JSONObject> {
+    /** 计算需要下载/更新的补丁列表（未安装、或已装版本低于服务器版本）。 */
+    fun pendingPatches(context: Context, manifest: List<JSONObject>): List<JSONObject> {
         val installed = installed(context)
         val skipped = try {
             val a = JSONArray(prefs(context).getString(KEY_SKIPPED, "[]"))
@@ -205,13 +206,22 @@ object PatchManager {
         } catch (_: Exception) {
             emptySet()
         }
+        // 当前 App 版本：补丁声明 minAppVersion 时，App 版本过低则不应用（避免旧版加载不兼容补丁）
+        val currentCode = try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionCode
+        } catch (_: Exception) {
+            Int.MAX_VALUE
+        }
         return manifest.filter { p ->
             val target = p.optString("target")
             val serverVer = p.optString("version")
             val localVer = installed[target]
-            // 需要更新：服务器版本存在且比本地新（本地缺失或版本号更小）
+            val minVer = p.optLong("minAppVersion", 0L)
+            // 需要更新：服务器版本存在且比本地新（本地缺失或版本号更小），
+            // 且当前 App 版本满足补丁的最低版本要求
             !skipped.contains(target) &&
                 serverVer.isNotBlank() &&
+                currentCode >= minVer &&
                 (localVer == null || versionCompare(serverVer, localVer) > 0)
         }
     }

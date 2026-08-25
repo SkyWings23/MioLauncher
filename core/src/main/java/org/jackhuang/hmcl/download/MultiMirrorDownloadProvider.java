@@ -48,6 +48,8 @@ public final class MultiMirrorDownloadProvider implements DownloadProvider {
     @Override
     public List<URI> getAssetObjectCandidates(String assetObjectLocation) {
         LinkedHashSet<URI> urls = new LinkedHashSet<>();
+        // assets 资源同样官方优先（Mojang CDN 快），BMCLAPI 兜底
+        urls.addAll(mojang.getAssetObjectCandidates(assetObjectLocation));
         for (DownloadProvider mirror : mirrors) {
             urls.addAll(mirror.getAssetObjectCandidates(assetObjectLocation));
         }
@@ -56,19 +58,19 @@ public final class MultiMirrorDownloadProvider implements DownloadProvider {
 
     @Override
     public String injectURL(String baseURL) {
-        // 主镜像为首选
-        return mirrors.get(0).injectURL(baseURL);
+        // 官方源优先（Mojang CDN 快），与 injectURLWithCandidates 保持一致
+        return mojang.injectURL(baseURL);
     }
 
     @Override
     public List<URI> injectURLWithCandidates(String baseURL) {
         LinkedHashSet<URI> candidates = new LinkedHashSet<>();
-        // 文件下载镜像优先（bmclapi 国内快，libraries 重定向教育网可用），官方兜底。
-        // manifest/版本json 单独在 getVersionListURLs 中官方优先（bmclapi 会 302 到被墙域名）。
+        // 官方（Mojang）源优先：实测官方 CDN 带宽远高于 BMCLAPI 镜像（快数倍到数十倍），
+        // 先走官方能显著提升大文件下载速度；BMCLAPI 镜像作为失败回退兜底，保证国内可达性。
+        candidates.addAll(mojang.injectURLWithCandidates(baseURL));
         for (DownloadProvider mirror : mirrors) {
             candidates.addAll(mirror.injectURLWithCandidates(baseURL));
         }
-        candidates.addAll(mojang.injectURLWithCandidates(baseURL));
         return List.copyOf(candidates);
     }
 
