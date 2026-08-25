@@ -17,6 +17,7 @@ object ResourceInstaller {
     enum class Type(val dirName: String, val facet: String) {
         MOD("mods", "mod"),
         SHADER("shaderpacks", "shader"),
+        RESOURCE_PACK("resourcepacks", "resourcepack"),
         WORLD("saves", "world"),
         MODPACK("modpacks", "modpack"),
     }

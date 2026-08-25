@@ -32,9 +32,10 @@ object ResourceImporter {
                     source.copyTo(File(targetRoot, uniqueName(targetRoot, source.name)), overwrite = true)
                 }
                 ResourceInstaller.Type.SHADER,
+                ResourceInstaller.Type.RESOURCE_PACK,
                 ResourceInstaller.Type.WORLD,
                 ResourceInstaller.Type.MODPACK -> {
-                    // 光影/地图/整合包：zip 解压为独立目录
+                    // 光影/材质/地图/整合包：zip 解压为独立目录
                     if (!source.name.endsWith(".zip", ignoreCase = true)) {
                         return "${typeLabel(type)}仅支持 .zip 压缩包"
                     }
@@ -94,6 +95,7 @@ object ResourceImporter {
     private fun typeLabel(type: ResourceInstaller.Type): String = when (type) {
         ResourceInstaller.Type.MOD -> "模组"
         ResourceInstaller.Type.SHADER -> "光影"
+        ResourceInstaller.Type.RESOURCE_PACK -> "材质包"
         ResourceInstaller.Type.WORLD -> "地图"
         ResourceInstaller.Type.MODPACK -> "整合包"
     }

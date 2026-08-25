@@ -158,20 +158,24 @@ object ModrinthApi {
         val urls = API_BASES.map { withBase(url, it) }
         val exec = java.util.concurrent.Executors.newFixedThreadPool(urls.size)
         try {
+            // 并发请求全部镜像/官方，谁先成功返回谁（不按顺序等待，避免镜像卡住拖慢整体）
+            val completion = java.util.concurrent.ExecutorCompletionService<JsonObject?>(exec)
             val futures = urls.map { u ->
-                exec.submit(
+                completion.submit(
                     java.util.concurrent.Callable<JsonObject?> {
                         req(u, URL(u).openConnection() as java.net.HttpURLConnection)
                     }
                 )
             }
-            for (f in futures) {
-                try {
-                    val r = f.get(12, java.util.concurrent.TimeUnit.SECONDS)
-                    if (r != null) return r
-                } catch (e: Exception) {
-                }
+            val deadline = System.currentTimeMillis() + 12000
+            for (i in urls.indices) {
+                val remain = deadline - System.currentTimeMillis()
+                if (remain <= 0) break
+                val r = completion.take().get(remain, java.util.concurrent.TimeUnit.MILLISECONDS)
+                if (r != null) return r
             }
+            return null
+        } catch (e: Exception) {
             return null
         } finally {
             exec.shutdownNow()
@@ -182,20 +186,24 @@ object ModrinthApi {
         val urls = API_BASES.map { withBase(url, it) }
         val exec = java.util.concurrent.Executors.newFixedThreadPool(urls.size)
         try {
+            // 并发请求全部镜像/官方，谁先成功返回谁（不按顺序等待，避免镜像卡住拖慢整体）
+            val completion = java.util.concurrent.ExecutorCompletionService<JsonArray?>(exec)
             val futures = urls.map { u ->
-                exec.submit(
+                completion.submit(
                     java.util.concurrent.Callable<JsonArray?> {
                         requestArray(u, URL(u).openConnection() as java.net.HttpURLConnection)
                     }
                 )
             }
-            for (f in futures) {
-                try {
-                    val r = f.get(12, java.util.concurrent.TimeUnit.SECONDS)
-                    if (r != null) return r
-                } catch (e: Exception) {
-                }
+            val deadline = System.currentTimeMillis() + 12000
+            for (i in urls.indices) {
+                val remain = deadline - System.currentTimeMillis()
+                if (remain <= 0) break
+                val r = completion.take().get(remain, java.util.concurrent.TimeUnit.MILLISECONDS)
+                if (r != null) return r
             }
+            return null
+        } catch (e: Exception) {
             return null
         } finally {
             exec.shutdownNow()
@@ -247,9 +255,15 @@ object ModrinthApi {
     /**
      * 获取项目的版本列表（Modrinth 返回从新到旧）。
      * 可用 gameVersion + loaders 过滤兼容版本。带内存缓存。
+     * @param limit 最多拉取版本数（大项目如整合包有数百版本，限制避免响应过大/镜像截断超时）
      */
-    fun versions(slug: String, gameVersion: String?, loaders: List<String>): List<ModrinthVersion> {
-        val key = "$slug|$gameVersion|${loaders.sorted()}"
+    fun versions(
+        slug: String,
+        gameVersion: String?,
+        loaders: List<String>,
+        limit: Int = 0,
+    ): List<ModrinthVersion> {
+        val key = "$slug|$gameVersion|${loaders.sorted()}|$limit"
         synchronized(versionsCache) { versionsCache[key]?.let { return it } }
         val base = "https://api.modrinth.com/v2/project/${enc(slug)}/version"
         val params = mutableListOf<String>()
@@ -258,6 +272,9 @@ object ModrinthApi {
         }
         if (loaders.isNotEmpty()) {
             params.add("loaders=${enc("[\"" + loaders.joinToString("\",\"") + "\"]")}")
+        }
+        if (limit > 0) {
+            params.add("limit=$limit")
         }
         val url = if (params.isEmpty()) base else "$base?${params.joinToString("&")}"
         val arr = getJsonArray(url) ?: return emptyList()

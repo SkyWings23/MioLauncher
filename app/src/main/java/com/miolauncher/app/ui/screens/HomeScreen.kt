@@ -660,7 +660,7 @@ private fun FeatureGrid(
             MioFeatureCard(
                 title = com.miolauncher.app.ui.theme.I18n.tr("home.modpacks"),
                 subtitle = com.miolauncher.app.ui.theme.I18n.tr("home.modpacks_sub"),
-                onClick = { onOpenDownloadTab(4) },
+                onClick = { onOpenDownloadTab(5) },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -668,7 +668,7 @@ private fun FeatureGrid(
             MioFeatureCard(
                 title = com.miolauncher.app.ui.theme.I18n.tr("home.worlds"),
                 subtitle = com.miolauncher.app.ui.theme.I18n.tr("home.worlds_sub"),
-                onClick = { onOpenDownloadTab(3) },
+                onClick = { onOpenDownloadTab(4) },
                 modifier = Modifier.weight(1f),
             )
             MioFeatureCard(

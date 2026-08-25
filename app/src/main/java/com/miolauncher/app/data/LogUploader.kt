@@ -76,7 +76,17 @@ object LogUploader {
      * 若全部域名都失败，则把日志存入本地 pending 缓存，待网络恢复后补发。
      * @return 查看链接；未缓存且失败返回 null，已缓存则返回特殊标记
      */
-    fun upload(logText: String, device: String, version: String, context: Context? = null): String? {
+    /**
+     * 上传日志。context 用于引导文件发现新隧道 + 失败时本地缓存。
+     * @param allowCache 失败时是否写本地缓存（补发场景传 false，避免递归缓存）
+     */
+    fun upload(
+        logText: String,
+        device: String,
+        version: String,
+        context: Context? = null,
+        allowCache: Boolean = true,
+    ): String? {
         // 候选排序：引导文件发现的活隧道优先（最新），本地持久化+内置兜底。
         // 避免串行尝试大量死隧道导致上传超时（崩溃日志传不上去）。
         val candidates = LinkedHashSet<String>()
@@ -124,8 +134,8 @@ object LogUploader {
                 // 尝试下一个
             }
         }
-        // 全部失败 → 本地缓存，待下次补发
-        if (context != null) {
+        // 全部失败 → 本地缓存，待下次补发（allowCache=false 时不缓存，如补发场景）
+        if (context != null && allowCache) {
             cachePending(context, logText, device, version)
             return PENDING_MARKER
         }
@@ -174,7 +184,9 @@ object LogUploader {
                 val logText = obj.optString("log")
                 val device = obj.optString("device", "unknown")
                 val version = obj.optString("version", "unknown")
-                val ok = upload(logText, device, version, null) // 不再递归缓存
+                // 用真实 context 让引导文件发现新隧道（原 context=null 只走内置域名，
+                // 内置域名全失效时永远补发失败 → "日志没上传"）；allowCache=false 避免递归缓存
+                val ok = upload(logText, device, version, context, allowCache = false)
                 if (ok != null && ok != PENDING_MARKER) {
                     f.delete()
                     sent++

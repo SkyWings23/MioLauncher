@@ -80,6 +80,19 @@ data class ShaderInfo(
     val iconUrl: String = "",
 )
 
+/** 材质包（resource pack）信息，结构与光影一致。 */
+data class ResourcePackInfo(
+    val name: String,
+    val author: String,
+    val description: String,
+    val version: String,
+    val slug: String = "",
+    val downloadUrl: String = "",
+    val fileSize: Long = 0,
+    val downloads: Long = 0,
+    val iconUrl: String = "",
+)
+
 data class WorldInfo(
     val name: String,
     val author: String,

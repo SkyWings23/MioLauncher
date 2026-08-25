@@ -104,7 +104,9 @@ fun ResourceDetailScreen(
             if (proj == null) projectError = "无法获取项目信息，请检查网络"
             versionsLoading = true
             val loadedVersions = withContext(Dispatchers.IO) {
-                runCatching { ModrinthApi.versions(detail.slug, detail.gameVersion, detail.loaders) }
+                // 整合包版本常达数百个，限制拉取数量避免大响应导致镜像截断/超时/渲染卡顿
+                val limit = if (detail.type == com.miolauncher.app.data.ResourceInstaller.Type.MODPACK) 30 else 0
+                runCatching { ModrinthApi.versions(detail.slug, detail.gameVersion, detail.loaders, limit) }
                     .getOrElse {
                         projectError = "版本信息解析失败，请稍后重试"
                         emptyList()

@@ -81,7 +81,14 @@ fun ResourceScreen(
     selectedTab: Int = 0,
     onTabSelected: (Int) -> Unit = {},
 ) {
-    val tabs = listOf(com.miolauncher.app.ui.theme.I18n.tr("dl.tab_versions"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_mods"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_shaders"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_worlds"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_modpacks"))
+    val tabs = listOf(
+        com.miolauncher.app.ui.theme.I18n.tr("dl.tab_versions"),
+        com.miolauncher.app.ui.theme.I18n.tr("dl.tab_mods"),
+        com.miolauncher.app.ui.theme.I18n.tr("dl.tab_shaders"),
+        com.miolauncher.app.ui.theme.I18n.tr("dl.tab_resources"),
+        com.miolauncher.app.ui.theme.I18n.tr("dl.tab_worlds"),
+        com.miolauncher.app.ui.theme.I18n.tr("dl.tab_modpacks"),
+    )
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -118,8 +125,9 @@ fun ResourceScreen(
             0 -> InstalledVersionList()
             1 -> ModListScreen(selectedVersionId = selectedVersionId)
             2 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.SHADER, selectedVersionId)
-            3 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.WORLD, selectedVersionId)
-            4 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.MODPACK, selectedVersionId)
+            3 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.RESOURCE_PACK, selectedVersionId)
+            4 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.WORLD, selectedVersionId)
+            5 -> LocalResourceList(com.miolauncher.app.data.ResourceInstaller.Type.MODPACK, selectedVersionId)
         }
     }
 }
@@ -508,6 +516,7 @@ private fun LocalResourceList(
 private fun typeLabel(type: com.miolauncher.app.data.ResourceInstaller.Type): String = when (type) {
     com.miolauncher.app.data.ResourceInstaller.Type.MOD -> "模组"
     com.miolauncher.app.data.ResourceInstaller.Type.SHADER -> "光影"
+    com.miolauncher.app.data.ResourceInstaller.Type.RESOURCE_PACK -> "材质包"
     com.miolauncher.app.data.ResourceInstaller.Type.WORLD -> "地图"
     com.miolauncher.app.data.ResourceInstaller.Type.MODPACK -> "整合包"
 }

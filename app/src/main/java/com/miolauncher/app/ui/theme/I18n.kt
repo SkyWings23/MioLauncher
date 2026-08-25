@@ -62,6 +62,7 @@ object I18n {
         "dl.tab_versions" to ("版本" to "Versions"),
         "dl.tab_mods" to ("模组" to "Mods"),
         "dl.tab_shaders" to ("光影" to "Shaders"),
+        "dl.tab_resources" to ("材质" to "Resource Packs"),
         "dl.tab_worlds" to ("地图" to "Worlds"),
         "dl.tab_modpacks" to ("整合包" to "Modpacks"),
         "dl.search_mods" to ("搜索模组（Modrinth）" to "Search mods (Modrinth)"),

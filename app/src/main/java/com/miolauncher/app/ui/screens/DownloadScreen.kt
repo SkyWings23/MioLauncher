@@ -91,7 +91,14 @@ fun DownloadScreen(
     versionListViewModel: VersionListViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
     selectedVersionId: String? = null,
 ) {
-    val tabs = listOf(com.miolauncher.app.ui.theme.I18n.tr("dl.tab_versions"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_mods"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_shaders"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_worlds"), com.miolauncher.app.ui.theme.I18n.tr("dl.tab_modpacks"))
+    val tabs = listOf(
+        com.miolauncher.app.ui.theme.I18n.tr("dl.tab_versions"),
+        com.miolauncher.app.ui.theme.I18n.tr("dl.tab_mods"),
+        com.miolauncher.app.ui.theme.I18n.tr("dl.tab_shaders"),
+        com.miolauncher.app.ui.theme.I18n.tr("dl.tab_resources"),
+        com.miolauncher.app.ui.theme.I18n.tr("dl.tab_worlds"),
+        com.miolauncher.app.ui.theme.I18n.tr("dl.tab_modpacks"),
+    )
 
     LaunchedEffect(Unit) {
         versionListViewModel.loadIfNeeded()
@@ -205,8 +212,9 @@ fun DownloadScreen(
                     )
                     1 -> ModDownloadList(onOpen = { item -> detailItem = item.toDetail(resourceCompat) })
                     2 -> ShaderDownloadList(onOpen = { item -> detailItem = item.toDetail(resourceCompat) })
-                    3 -> WorldDownloadList(onOpen = { item -> detailItem = item.toDetail(resourceCompat) })
-                    4 -> ModpackDownloadList(onOpen = { item -> detailItem = item.toDetail(resourceCompat) })
+                    3 -> ResourcePackDownloadList(onOpen = { item -> detailItem = item.toDetail(resourceCompat) })
+                    4 -> WorldDownloadList(onOpen = { item -> detailItem = item.toDetail(resourceCompat) })
+                    5 -> ModpackDownloadList(onOpen = { item -> detailItem = item.toDetail(resourceCompat) })
                 }
             }
         }
@@ -1010,6 +1018,63 @@ private fun ShaderDownloadList(onOpen: (ShaderInfo) -> Unit) {
 }
 
 @Composable
+private fun ResourcePackDownloadList(onOpen: (com.miolauncher.app.data.ResourcePackInfo) -> Unit) {
+    val scope = rememberCoroutineScope()
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var items by remember { mutableStateOf<List<com.miolauncher.app.data.ModrinthApi.SearchHit>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        loading = true
+        val page = withContext(Dispatchers.IO) {
+            com.miolauncher.app.data.ModrinthApi.search("", "resourcepack", emptyList(), 0, 30)
+        }
+        items = page
+        if (page.isEmpty()) error = "未找到材质包资源"
+        loading = false
+    }
+    when {
+        loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            androidx.compose.material3.CircularProgressIndicator(color = MioGreen)
+        }
+        error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(error!!, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(12.dp))
+                androidx.compose.material3.OutlinedButton(onClick = {}) { Text("重试") }
+            }
+        }
+        else -> LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(items, key = { it.slug }) { h ->
+                DownloadRow(
+                    title = h.title,
+                    subtitle = "${h.author} · ${h.description}",
+                    extra = "${h.downloads / 1_000_000}M 下载",
+                    installed = false,
+                    icon = {
+                        com.miolauncher.app.ui.components.RemoteIcon(
+                            url = h.iconUrl, contentDescription = null, size = 48.dp,
+                        )
+                    },
+                    onClick = {
+                        onOpen(
+                            com.miolauncher.app.data.ResourcePackInfo(
+                                name = h.title, author = h.author, description = h.description,
+                                version = h.latestVersion, slug = h.slug,
+                                downloads = h.downloads, iconUrl = h.iconUrl,
+                            )
+                        )
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun WorldDownloadList(onOpen: (WorldInfo) -> Unit) {
     val scope = rememberCoroutineScope()
     var loading by remember { mutableStateOf(true) }
@@ -1269,6 +1334,12 @@ private fun ShaderInfo.toDetail(c: ResourceCompat) = ResourceDetail(
     title = name, author = author, description = description, version = version,
     type = com.miolauncher.app.data.ResourceInstaller.Type.SHADER,
     slug = slug, gameVersion = c.gameVersion, loaders = emptyList(),
+)
+
+private fun com.miolauncher.app.data.ResourcePackInfo.toDetail(c: ResourceCompat) = ResourceDetail(
+    title = name, author = author, description = description, version = version,
+    type = com.miolauncher.app.data.ResourceInstaller.Type.RESOURCE_PACK,
+    slug = slug, gameVersion = null, loaders = emptyList(),
 )
 
 private fun WorldInfo.toDetail(c: ResourceCompat) = ResourceDetail(
