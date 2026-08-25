@@ -86,6 +86,19 @@ object LogUploader {
                 // 尝试下一个域名
             }
         }
+        // 全部候选失败：尝试引导文件发现新隧道（硬编码/持久化域名全失效时的自愈）
+        if (context != null) {
+            val discovered = com.miolauncher.app.data.PatchManager.fetchBootstrapEndpoints(context)
+            if (discovered.isNotEmpty()) {
+                for (base in discovered) {
+                    try {
+                        val view = uploadOnce(base, logText, device, version, null)
+                        if (view != null) return view
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
         // 全部失败 → 本地缓存，待下次补发
         if (context != null) {
             cachePending(context, logText, device, version)
