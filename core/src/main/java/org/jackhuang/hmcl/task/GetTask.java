@@ -88,7 +88,8 @@ public final class GetTask extends FetchTask<String> {
                 if (response != null)
                     charset = NetworkUtils.getCharsetFromContentType(response.headers().firstValue("content-type").orElse(null));
 
-                String result = baos.toString(charset);
+                // Android 的 ByteArrayOutputStream 没有 toString(Charset)（Java 10+ API），改用 toByteArray
+                String result = new String(baos.toByteArray(), charset);
                 setResult(result);
 
                 if (checkETag) {

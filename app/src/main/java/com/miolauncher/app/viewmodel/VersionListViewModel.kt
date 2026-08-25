@@ -60,8 +60,14 @@ class VersionListViewModel : ViewModel() {
                 // 阶段2：网络刷新（成功更新缓存，失败静默保留旧列表）
                 _versions.value = repository.loadVersions()
                 loaded = true
+                _error.value = null
             } catch (e: Throwable) {
-                _error.value = null  // 有缓存时不显示错误
+                // 有缓存时静默（保留旧列表）；无缓存时显示错误，避免误显示"暂无版本"
+                if (cached == null || cached.isEmpty()) {
+                    _error.value = e.message ?: "版本列表加载失败"
+                } else {
+                    _error.value = null
+                }
             } finally {
                 _loading.value = false
             }
@@ -87,11 +93,13 @@ class VersionListViewModel : ViewModel() {
                     loader = loader,
                     onStage = { stage, progress ->
                         // 整体进度 = (已完成任务 + 当前任务进度) / 任务总数。
-                        // 分母取 max(taskCount, done+1)，避免当前任务未完成时进度提前到 100%
+                        // 旧公式分母取 max(taskCount, done+1)：全部任务完成后 done==taskCount 时
+                        // 分母仍为 taskCount+1，进度永远停在 ~99% 直到安装函数返回（"下载卡 99%"）。
+                        // 改为：全部任务完成 → 直接 100%；否则 (done + 当前进度) / 任务总数。
                         val taskCount = DownloadManager.task(taskId)?.filesTotal ?: 1
                         val done = DownloadManager.task(taskId)?.filesDone ?: 0
-                        val denom = maxOf(taskCount.coerceAtLeast(1), done + 1)
-                        val overall = ((done + progress.coerceIn(0f, 1f)) / denom)
+                        val overall = if (done >= taskCount.coerceAtLeast(1)) 1f
+                        else ((done + progress.coerceIn(0f, 1f)) / taskCount.coerceAtLeast(1))
                             .coerceIn(0f, 1f)
                         _installProgress.update { it?.copy(currentStage = stage, overallProgress = overall) }
                         DownloadManager.setStage(taskId, stage)
@@ -106,8 +114,17 @@ class VersionListViewModel : ViewModel() {
                     onTaskDone = {
                         // 完成一个下载任务（对应 onFinished）
                         DownloadManager.fileDone(taskId)
+                        // 任务完成时立即刷新整体进度：全部完成 → 100%（避免"卡 99%"）
+                        val taskCount = DownloadManager.task(taskId)?.filesTotal ?: 1
+                        val done = DownloadManager.task(taskId)?.filesDone ?: 0
+                        if (done >= taskCount.coerceAtLeast(1)) {
+                            _installProgress.update { it?.copy(overallProgress = 1f) }
+                            DownloadManager.setProgress(taskId, 1f)
+                        }
                     },
                     onItem = { name, fileProgress, done ->
+                        // 同步当前文件到全局下载任务（顶部"正在下载"实时显示，避免玩家误以为卡住）
+                        com.miolauncher.app.data.DownloadManager.setStage(taskId, name)
                         _installProgress.update { p ->
                             p?.let {
                                 val items = it.items.toMutableList()
@@ -143,10 +160,10 @@ class VersionListViewModel : ViewModel() {
                 }
             } catch (e: Throwable) {
                 _installProgress.update {
-                    it?.copy(isDone = true, error = e.message, currentStage = "安装失败")
+                    it?.copy(isDone = true, error = friendlyError(versionId, loader, e), currentStage = "安装失败")
                 }
                 DownloadManager.finish(taskId, error = e.message)
-                _installMessage.value = "安装失败：${e.message}"
+                _installMessage.value = "安装失败：${friendlyError(versionId, loader, e)}"
             }
         }
     }
@@ -154,6 +171,18 @@ class VersionListViewModel : ViewModel() {
     fun dismissInstall() {
         _installProgress.value = null
         _installMessage.value = null
+    }
+
+    /** 把底层错误转为玩家可理解的提示 */
+    private fun friendlyError(versionId: String, loader: McLoader, e: Throwable): String {
+        val msg = e.message ?: "未知错误"
+        // Forge/NeoForge 需要运行外部 Java 进程，Android SELinux 禁止 exec app 目录二进制
+        if ((loader == McLoader.FORGE || loader == McLoader.NEO_FORGE)
+            && (msg.contains("Permission denied") || msg.contains("execute_no_trans") || msg.contains("Cannot run program"))) {
+            return "Forge 安装器需要运行外部 Java 进程，但 Android 系统安全限制（SELinux）禁止了此操作，导致无法安装。\n" +
+                "请改用原版或 Fabric/Quilt 加载器（Forge 请在电脑端启动器安装）。"
+        }
+        return msg
     }
 
     /**

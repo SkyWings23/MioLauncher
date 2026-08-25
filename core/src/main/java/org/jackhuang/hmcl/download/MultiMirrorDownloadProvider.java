@@ -35,12 +35,13 @@ public final class MultiMirrorDownloadProvider implements DownloadProvider {
 
     @Override
     public List<URI> getVersionListURLs() {
-        // 版本清单镜像优先（bmclapi2 设备实测 0.65s 快且完整），官方兜底
+        // 版本清单多源：官方 + 镜像都提供，GameVersionList 用 retry=1 逐源快速尝试。
+        // 任一源可达即秒出；全不可达时每源只等 8s，不会像 retry=3 那样累计 72s。
         LinkedHashSet<URI> urls = new LinkedHashSet<>();
+        urls.addAll(mojang.getVersionListURLs());
         for (DownloadProvider mirror : mirrors) {
             urls.addAll(mirror.getVersionListURLs());
         }
-        urls.addAll(mojang.getVersionListURLs());
         return List.copyOf(urls);
     }
 

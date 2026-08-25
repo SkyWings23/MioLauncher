@@ -45,6 +45,12 @@ object GameLauncher {
                     Log.w("MioGame", "版本 $versionId Java 不兼容: $compatMsg")
                     throw java.lang.IllegalStateException(compatMsg)
                 }
+                // 26.x 及以上需要 LWJGL 3.4 + SDL3 原生库（当前启动器未提供），直接拒绝并提示，
+                // 避免启动时 LibFFI/SDL UnsatisfiedLinkError 崩溃。
+                val major = versionId.substringBefore('-').split('.').firstOrNull()?.toIntOrNull()
+                if (major != null && major >= 26) {
+                    throw java.lang.IllegalStateException("$versionId 需要 SDL3/LWJGL 3.4 原生支持，当前版本暂不支持，请使用 1.x ~ 25.x 版本")
+                }
                 repo.ensureLibraries(versionId)
                 val user = offlineUsername(context) ?: "Player"
                 withContext(Dispatchers.Main) {

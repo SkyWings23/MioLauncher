@@ -71,10 +71,19 @@ fun ProfileScreen(
     val prefs = remember { context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE) }
     var username by remember { mutableStateOf(prefs.getString(KEY_USERNAME, "") ?: "") }
     var showLoginDialog by remember { mutableStateOf(false) }
+    var showLittleSkinLogin by remember { mutableStateOf(false) }
+    var showSkinDialog by remember { mutableStateOf(false) }
+    var littleSkinSession by remember {
+        mutableStateOf(com.miolauncher.app.data.LittleSkinAccount.load(context))
+    }
+    var msSession by remember {
+        mutableStateOf(com.miolauncher.app.data.MsAccount.load(context))
+    }
     var showLaunchSettings by remember { mutableStateOf(false) }
     var showVirtualControls by remember { mutableStateOf(false) }
     var showJavaInfo by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
+    var latestPatchVersion by remember { mutableStateOf("") }
     var showJoinUs by remember { mutableStateOf(false) }
     var showMsLogin by remember { mutableStateOf(false) }
     var showLangDialog by remember { mutableStateOf(false) }
@@ -128,6 +137,37 @@ fun ProfileScreen(
             username = username,
             onClick = { showLoginDialog = true },
         )
+        Spacer(Modifier.height(8.dp))
+        // 正版（微软）登录入口
+        androidx.compose.material3.OutlinedButton(
+            onClick = { showMsLogin = true },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                if (msSession != null) "正版已登录：${msSession!!.username}"
+                else "微软登录（正版）",
+                color = if (msSession != null) MioGreen else MaterialTheme.colorScheme.primary,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        // LittleSkin 外置登录入口
+        androidx.compose.material3.OutlinedButton(
+            onClick = { showLittleSkinLogin = true },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                if (littleSkinSession != null) "LittleSkin 已登录：${littleSkinSession!!.username}"
+                else "LittleSkin 外置登录（皮肤/服务器）",
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        // 自定义皮肤入口
+        androidx.compose.material3.OutlinedButton(
+            onClick = { showSkinDialog = true },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("自定义皮肤")
+        }
         Spacer(Modifier.height(16.dp))
         SettingsGroup(
             darkTheme = darkTheme,
@@ -173,6 +213,22 @@ fun ProfileScreen(
         )
     }
 
+    if (showLittleSkinLogin) {
+        com.miolauncher.app.ui.components.LittleSkinLoginDialog(
+            onSuccess = {
+                littleSkinSession = com.miolauncher.app.data.LittleSkinAccount.load(context)
+                showLittleSkinLogin = false
+            },
+            onDismiss = { showLittleSkinLogin = false },
+        )
+    }
+
+    if (showSkinDialog) {
+        com.miolauncher.app.ui.components.SkinDialog(
+            onDismiss = { showSkinDialog = false },
+        )
+    }
+
 
     if (showJavaInfo) {
         var jreStatus by remember { mutableStateOf("查询中…") }
@@ -207,6 +263,33 @@ fun ProfileScreen(
     }
 
     if (showAbout) {
+        // 拉取服务器最新补丁编号（显示在"关于"里）
+        LaunchedEffect(showAbout) {
+            latestPatchVersion = ""
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    val manifest = com.miolauncher.app.data.PatchManager.fetchManifest(context)
+                    val installed = com.miolauncher.app.data.PatchManager.installed(context)
+                    val all = manifest.mapNotNull { p ->
+                        val target = p.optString("target")
+                        if (target.isBlank() || p.optString("version").isBlank()) null
+                        else target to p.optString("version")
+                    }
+                    // 已安装的最新编号
+                    val installedMax = installed.values
+                        .mapNotNull { it.toIntOrNull() }.maxOrNull()
+                    val serverMax = all.mapNotNull { it.second.toIntOrNull() }.maxOrNull()
+                    val latest = listOfNotNull(installedMax, serverMax).maxOrNull() ?: 0
+                    // 检查是否有待装补丁
+                    val hasPending = com.miolauncher.app.data.PatchManager.pendingPatches(context, manifest).isNotEmpty()
+                    val v = if (latest == 0) "无"
+                    else "$latest" + if (hasPending) "（有新补丁待安装）" else ""
+                    v
+                } catch (_: Throwable) {
+                    "获取失败"
+                }
+            }.let { latestPatchVersion = it }
+        }
         AlertDialog(
             onDismissRequest = { showAbout = false },
             title = { Text(com.miolauncher.app.ui.theme.I18n.tr("profile.about"), fontWeight = FontWeight.Bold) },
@@ -214,6 +297,12 @@ fun ProfileScreen(
                     Text(
                         "MioLauncher v${com.miolauncher.app.BuildConfig.VERSION_NAME}\n\n自由 · 开源 · 属于你的 Minecraft 启动器\n\nGPL-3.0",
                         style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "🧩 当前补丁编号：#${latestPatchVersion.ifBlank { "查询中…" }}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
                     )
                     Spacer(Modifier.height(14.dp))
                     Text("👥 工作人员", fontWeight = FontWeight.Bold)
@@ -281,19 +370,12 @@ fun ProfileScreen(
     }
 
     if (showMsLogin) {
-        AlertDialog(
-            onDismissRequest = { showMsLogin = false },
-            title = { Text("微软登录（正版）", fontWeight = FontWeight.Bold) },
-            text = {
-                Text(
-                    "正版登录正在开发中。\n\n" +
-                        "当前版本支持离线账户（离线模式 · $username）。\n\n" +
-                        "正式支持正版登录需要配置 Azure 应用 Client ID，敬请期待。"
-                )
+        com.miolauncher.app.ui.components.MsLoginDialog(
+            onSuccess = {
+                msSession = com.miolauncher.app.data.MsAccount.load(context)
+                showMsLogin = false
             },
-            confirmButton = {
-                TextButton(onClick = { showMsLogin = false }) { Text("知道了") }
-            },
+            onDismiss = { showMsLogin = false },
         )
     }
     if (showLangDialog) {

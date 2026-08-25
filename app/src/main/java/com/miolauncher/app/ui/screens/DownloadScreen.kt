@@ -103,6 +103,7 @@ fun DownloadScreen(
     val installMessage by versionListViewModel.installMessage.collectAsState()
 
     var pendingInstallVersion by remember { mutableStateOf<String?>(null) }
+    var forceInstallVersion by remember { mutableStateOf<String?>(null) }   // Java 不兼容但用户选择强制下载
     var showInstallPanel by remember { mutableStateOf(false) }
     var installMinimized by remember { mutableStateOf(false) }
     var showCloseConfirm by remember { mutableStateOf(false) }
@@ -190,7 +191,17 @@ fun DownloadScreen(
                         loading = loading,
                         error = error,
                         onRetry = { versionListViewModel.refresh() },
-                        onInstall = { pendingInstallVersion = it },
+                        onInstall = { v ->
+                            // 检查 Java 兼容性：不兼容时弹出提示，允许用户选择强制下载或取消
+                            val compatMsg = try {
+                                com.miolauncher.app.data.MioRepository(context).javaCompatibilityMessage(v)
+                            } catch (_: Exception) { null }
+                            if (compatMsg != null) {
+                                forceInstallVersion = v
+                            } else {
+                                pendingInstallVersion = v
+                            }
+                        },
                     )
                     1 -> ModDownloadList(onOpen = { item -> detailItem = item.toDetail(resourceCompat) })
                     2 -> ShaderDownloadList(onOpen = { item -> detailItem = item.toDetail(resourceCompat) })
@@ -254,6 +265,41 @@ fun DownloadScreen(
                 versionListViewModel.installVersion(versionId, loader)
             },
             onDismiss = { pendingInstallVersion = null },
+        )
+    }
+
+    // Java 版本不兼容确认框：允许用户选择强制下载或取消
+    forceInstallVersion?.let { versionId ->
+        val msg = runCatching {
+            com.miolauncher.app.data.MioRepository(context).javaCompatibilityMessage(versionId)
+        }.getOrNull() ?: "该版本所需 Java 版本超出启动器支持范围"
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { forceInstallVersion = null },
+            title = { Text("Java 版本不兼容", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text(msg, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "仍可强制下载，但下载后启动器可能无法运行该版本。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    forceInstallVersion = null
+                    pendingInstallVersion = versionId
+                }) {
+                    Text("强制下载", color = MioGreen, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { forceInstallVersion = null }) {
+                    Text("不下载")
+                }
+            },
         )
     }
 
@@ -468,6 +514,16 @@ private fun InstallProgressPanel(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // 正在下载的文件名（实时，避免玩家误以为卡住）
+                    if (!done && task != null && task!!.currentFile.isNotBlank() && task!!.currentFile != progress.currentStage) {
+                        Text(
+                            text = "正在下载：${task!!.currentFile}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MioGreen,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 // 展开/收起切换
                 if (!done) {
@@ -1021,55 +1077,134 @@ private fun WorldDownloadList(onOpen: (WorldInfo) -> Unit) {
 @Composable
 private fun ModpackDownloadList(onOpen: (ModpackInfo) -> Unit) {
     val scope = rememberCoroutineScope()
+    var query by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
+    var loadingMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var items by remember { mutableStateOf<List<com.miolauncher.app.data.ModrinthApi.SearchHit>>(emptyList()) }
-    LaunchedEffect(Unit) {
-        loading = true
-        val page = withContext(Dispatchers.IO) {
-            com.miolauncher.app.data.ModrinthApi.search("", "modpack", emptyList(), 0, 30)
+    var offset by remember { mutableIntStateOf(0) }
+    var hasMore by remember { mutableStateOf(false) }
+
+    fun load(reset: Boolean) {
+        if (reset) {
+            items = emptyList()
+            offset = 0
+            loading = true
+            error = null
+        } else {
+            loadingMore = true
         }
-        items = page
-        if (page.isEmpty()) error = "未找到整合包资源"
-        loading = false
+        scope.launch {
+            val page = withContext(Dispatchers.IO) {
+                runCatching {
+                    com.miolauncher.app.data.ModrinthApi.search(query.trim(), "modpack", emptyList(), offset, 30)
+                }.getOrElse {
+                    error = "网络错误：${it.message}"
+                    emptyList()
+                }
+            }
+            if (reset) {
+                items = page
+                if (page.isEmpty() && error == null) {
+                    error = if (query.isNotBlank()) "未找到相关整合包" else "未找到整合包资源"
+                }
+            } else {
+                items = items + page
+            }
+            hasMore = page.size == 30
+            offset += page.size
+            loading = false
+            loadingMore = false
+        }
     }
-    when {
-        loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            androidx.compose.material3.CircularProgressIndicator(color = MioGreen)
-        }
-        error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(error!!, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(12.dp))
-                androidx.compose.material3.OutlinedButton(onClick = {}) { Text("重试") }
+
+    LaunchedEffect(Unit) { load(true) }
+
+    Column(Modifier.fillMaxSize()) {
+        // 搜索栏
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            androidx.compose.material3.OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text(com.miolauncher.app.ui.theme.I18n.tr("dl.search_modpacks")) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            androidx.compose.material3.Button(
+                onClick = { load(true) },
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MioGreen),
+                enabled = !loading,
+            ) {
+                Text(com.miolauncher.app.ui.theme.I18n.tr("dl.search"))
             }
         }
-        else -> LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            items(items, key = { it.slug }) { h ->
-                DownloadRow(
-                    title = h.title,
-                    subtitle = "${h.author} · ${h.description}",
-                    extra = "${h.downloads / 1_000_000}M 下载",
-                    installed = false,
-                    icon = {
-                        com.miolauncher.app.ui.components.RemoteIcon(
-                            url = h.iconUrl, contentDescription = null, size = 48.dp,
-                        )
-                    },
-                    onClick = {
-                        onOpen(
-                            ModpackInfo(
-                                name = h.title, author = h.author, description = h.description,
-                                version = h.latestVersion, slug = h.slug,
-                                downloads = h.downloads, iconUrl = h.iconUrl,
+
+        when {
+            loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                androidx.compose.material3.CircularProgressIndicator(color = MioGreen)
+            }
+            error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(error!!, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(12.dp))
+                    androidx.compose.material3.OutlinedButton(onClick = { load(true) }) { Text("重试") }
+                }
+            }
+            else -> LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item {
+                    Text(
+                        text = "共 ${items.size} 个整合包" + if (query.isNotBlank()) "（搜索：$query）" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
+                items(items, key = { it.slug }) { h ->
+                    DownloadRow(
+                        title = h.title,
+                        subtitle = "${h.author} · ${h.description}",
+                        extra = "${h.downloads / 1_000_000}M 下载",
+                        installed = false,
+                        icon = {
+                            com.miolauncher.app.ui.components.RemoteIcon(
+                                url = h.iconUrl, contentDescription = null, size = 48.dp,
                             )
-                        )
-                    },
-                )
+                        },
+                        onClick = {
+                            onOpen(
+                                ModpackInfo(
+                                    name = h.title, author = h.author, description = h.description,
+                                    version = h.latestVersion, slug = h.slug,
+                                    downloads = h.downloads, iconUrl = h.iconUrl,
+                                )
+                            )
+                        },
+                    )
+                }
+                // 加载更多
+                if (hasMore) {
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                            if (loadingMore) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = MioGreen,
+                                )
+                            } else {
+                                androidx.compose.material3.TextButton(onClick = { load(false) }) {
+                                    Text("加载更多")
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1085,7 +1220,9 @@ private fun ModpackDownloadList(onOpen: (ModpackInfo) -> Unit) {
  * 1.21.11_unobfuscated、b1.0、a1.2.6 等）返回 false，供"仅正式版"开关过滤。
  */
 private fun isStandardVersionId(id: String): Boolean {
-    return Regex("^\\d+\\.\\d+(\\.\\d+)?$").matches(id)
+    val m = Regex("^(\\d+)\\.(\\d+)(\\.\\d+)?$").matchEntire(id) ?: return false
+    val major = m.groupValues[1].toIntOrNull() ?: return false
+    return major >= 1
 }
 
 private val GameVersionType.label: String
@@ -1143,7 +1280,9 @@ private fun WorldInfo.toDetail(c: ResourceCompat) = ResourceDetail(
 private fun ModpackInfo.toDetail(c: ResourceCompat) = ResourceDetail(
     title = name, author = author, description = description, version = version,
     type = com.miolauncher.app.data.ResourceInstaller.Type.MODPACK,
-    slug = slug, gameVersion = gameVersion.takeIf { it.isNotBlank() }, loaders = listOf(loader.id),
+    slug = slug, gameVersion = gameVersion.takeIf { it.isNotBlank() },
+    // 空加载器不要传（Modrinth loaders=[""] 会返回空列表，导致整合包版本加载不出来）
+    loaders = if (loader.id.isBlank()) emptyList() else listOf(loader.id),
 )
 
 private val ModLoader.id: String

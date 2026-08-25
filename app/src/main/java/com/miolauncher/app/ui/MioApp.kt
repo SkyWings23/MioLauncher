@@ -29,8 +29,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -84,10 +86,12 @@ import kotlin.random.Random
 @Composable
 fun MioApp() {
     var currentTab by rememberSaveable { mutableStateOf(MainTab.HOME) }
-    var darkTheme by rememberSaveable { mutableStateOf(true) }
+    val context = LocalContext.current
+    var darkTheme by rememberSaveable {
+        mutableStateOf(com.miolauncher.app.data.ThemeStore.isDark(context))
+    }
     var downloadTab by rememberSaveable { mutableIntStateOf(0) }
     var resourceTab by rememberSaveable { mutableIntStateOf(0) }
-    val context = LocalContext.current
     // 当前选中的游戏版本：提升到最外层持久化，跨 tab 切换/应用重启不丢失
     var selectedVersionId by rememberSaveable {
         mutableStateOf(com.miolauncher.app.data.GameVersionStore.get(context))
@@ -118,7 +122,32 @@ fun MioApp() {
                 crashDiagnoses = withContext(Dispatchers.IO) {
                     com.miolauncher.backend.GameLogAnalyzer.analyzeGameLogs(context)
                 }
+                // 崩溃自动上传到云端（后台线程，不阻塞 UI；去重避免重复传）
+                val ctx = context
+                Thread {
+                    try {
+                        com.miolauncher.app.data.LogUploader.autoUpload(
+                            report.combined,
+                            com.miolauncher.app.data.LogUploader.deviceInfo(ctx),
+                            report.title,
+                            ctx,
+                        )
+                    } catch (_: Exception) {}
+                }.start()
             }
+        }
+        // 启动时补发本地缓存的崩溃日志（上次断网时存的，联网后自动补传）
+        val ctx0 = context
+        Thread {
+            try {
+                com.miolauncher.app.data.LogUploader.flushPending(ctx0)
+            } catch (_: Exception) {}
+        }.start()
+        // 游戏内点了"陶瓦联机"按钮 → 切到联机页
+        val terracottaSwitch = java.io.File(context.filesDir, "mio/terracotta_switch")
+        if (terracottaSwitch.exists()) {
+            terracottaSwitch.delete()
+            currentTab = MainTab.MULTIPLAYER
         }
     }
 
@@ -173,8 +202,32 @@ fun MioApp() {
             jreState = 1f to "Java 运行时就绪"
             jreDone = true
         } catch (e: Exception) {
-            jreFailed = e.message ?: "解压失败"
+            // 附加上下文：存储空间不足 / 权限，便于用户知道原因（"Java环境已损坏"常见诱因）
+            val extra = try {
+                val stat = android.os.StatFs(context.filesDir.absolutePath)
+                val freeMb = stat.availableBlocksLong * stat.blockSizeLong / 1024 / 1024
+                if (freeMb < 300) "（可用存储不足 ${freeMb}MB，请清理空间后重试）" else ""
+            } catch (_: Throwable) { "" }
+            jreFailed = (e.message ?: "解压失败") + extra
         }
+    }
+
+    // 首次启动：用户协议（同意后持久化，之后不再弹出）
+    var showEula by remember {
+        mutableStateOf(!com.miolauncher.app.data.UiSettingsStore.eulaAccepted(context))
+    }
+    if (showEula) {
+        EulaDialog(
+            onAccept = {
+                com.miolauncher.app.data.UiSettingsStore.setEulaAccepted(context, true)
+                showEula = false
+            },
+            onDecline = {
+                (context as? android.app.Activity)?.finishAffinity()
+                android.os.Process.killProcess(android.os.Process.myPid())
+            },
+        )
+        return
     }
 
     if (showSplash) {
@@ -248,8 +301,8 @@ fun MioApp() {
                                     scaleIn(
                                         initialScale = 0.85f,
                                         animationSpec = androidx.compose.animation.core.spring(
-                                            dampingRatio = 0.6f,
-                                            stiffness = 300f,
+                                            dampingRatio = 0.5f,
+                                            stiffness = 320f,
                                         ),
                                     )
                                 val exit = slideOutHorizontally(
@@ -305,7 +358,10 @@ fun MioApp() {
                             )
                             MainTab.PROFILE -> ProfileScreen(
                                 darkTheme = darkTheme,
-                                onThemeChange = { darkTheme = it },
+                                onThemeChange = {
+                                    darkTheme = it
+                                    com.miolauncher.app.data.ThemeStore.setDark(context, it)
+                                },
                                 openLaunchSettings = openLaunchSettings,
                                 onConsumeOpenLaunchSettings = { openLaunchSettings = false },
                             )
@@ -347,6 +403,96 @@ fun MioApp() {
         }
     }
 }
+
+@Composable
+private fun EulaDialog(
+    onAccept: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDecline) {
+        androidx.compose.foundation.layout.Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 560.dp)
+                .background(MaterialTheme.colorScheme.surface, androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+                .padding(22.dp),
+        ) {
+            Text("用户协议", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MioGreen)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "MioLauncher v${com.miolauncher.app.BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            Box(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .fillMaxWidth()
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+                    )
+                    .padding(14.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    buildEulaText(),
+                    style = MaterialTheme.typography.bodySmall,
+                    lineHeight = 18.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+            androidx.compose.material3.Button(
+                onClick = onAccept,
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MioGreen),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("同意并继续", fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(6.dp))
+            androidx.compose.material3.TextButton(
+                onClick = onDecline,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("不同意", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+private fun buildEulaText(): String = """
+一、接受条款
+使用本软件即表示您已阅读、理解并同意本协议的全部内容。若您不同意，请勿安装或使用本软件。
+
+二、软件说明
+MioLauncher 是一款自由、开源的 Minecraft 启动器，提供版本管理、启动游戏、资源下载、联机等辅助功能。本软件不包含任何游戏本体。
+
+三、版权与商标声明
+本软件与 Mojang AB、Microsoft 及任何其他相关方均无隶属关系。Minecraft 及其相关商标归 Mojang AB 所有。游戏资源版权归其各自所有者。
+
+四、开源许可
+本软件基于 GPL-3.0 开源许可发布，您可以自由使用、修改、分发，但任何修改后的版本也必须以 GPL-3.0 许可发布。仅供学习交流使用，请支持正版 Minecraft。
+
+五、免责声明
+本软件按"现状"提供，不附带任何明示或默示的担保，包括但不限于适销性、特定用途适用性及不侵权的担保。开发者不对因使用本软件而产生的任何直接或间接损失承担责任，包括但不限于数据丢失、游戏存档损坏等。
+
+六、用户责任
+您应自行负责：
+· 下载、安装、使用游戏及模组的合法性；
+· 妥善保管账号信息，因账号问题产生的损失与本软件无关；
+· 使用本软件时的网络流量及产生的费用。
+
+七、数据收集与隐私
+为改进软件质量，本软件在游戏或软件发生崩溃时，可能会自动上传崩溃日志（含设备型号、系统版本、日志内容）至开发者服务器用于诊断。日志不含任何账号密码等敏感信息。您同意后，此行为即生效；不同意请勿使用本软件。
+
+八、协议变更
+开发者可能不时更新本协议，更新后首次启动时会再次提示。
+
+九、联系方式
+如有疑问，可通过开发者渠道联系（QQ 群等）。
+""".trimIndent()
 
 @Composable
 private fun AppNoticeDialog(
@@ -765,6 +911,11 @@ private fun JreSetupScreen(
                     text = error,
                     color = Color(0xFFFF6B6B),
                     fontSize = 13.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 120.dp)
+                        .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                        .padding(end = 4.dp),
                 )
                 Spacer(Modifier.height(12.dp))
                 if (onRetry != null) {

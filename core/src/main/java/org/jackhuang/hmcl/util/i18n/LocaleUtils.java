@@ -100,21 +100,23 @@ public final class LocaleUtils {
             byte[] buf = new byte[65536];
             int n;
             while ((n = resource.read(buf)) != -1) baos.write(buf, 0, n);
-            new String(baos.toByteArray(), StandardCharsets.UTF_8).lines().forEach(line -> {
-                if (line.startsWith("#") || line.isBlank())
-                    return;
+            // Android 的 String 没有 lines()（Java 11+），用 split 兼容
+            String[] lines = new String(baos.toByteArray(), StandardCharsets.UTF_8).split("\\r?\\n", -1);
+            for (String line : lines) {
+                if (line.startsWith("#") || line.trim().isEmpty())
+                    continue;
 
                 String[] items = line.split(",");
                 if (items.length < 2) {
                     LOG.warning("Invalid line in " + fileName + ": " + line);
-                    return;
+                    continue;
                 }
 
                 String parent = items[0];
                 for (int i = 1; i < items.length; i++) {
                     result.put(items[i], parent);
                 }
-            });
+            }
         } catch (Throwable e) {
             LOG.warning("Failed to load " + fileName, e);
         }

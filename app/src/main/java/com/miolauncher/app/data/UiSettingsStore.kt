@@ -12,6 +12,16 @@ object UiSettingsStore {
     private const val KEY_HIDE_NON_STANDARD = "ui_hide_non_standard_versions"
     private const val KEY_PAGE_ANIM = "ui_page_animation"
     private const val KEY_PAGE_ANIM_MS = "ui_page_animation_ms"
+    private const val KEY_EULA_ACCEPTED = "ui_eula_accepted"
+
+    /** 用户协议是否已同意（首次启动弹窗，同意后不再出现） */
+    fun eulaAccepted(context: Context): Boolean =
+        context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(KEY_EULA_ACCEPTED, false)
+
+    fun setEulaAccepted(context: Context, value: Boolean) {
+        context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_EULA_ACCEPTED, value).apply()
+    }
 
     fun showSplash(context: Context): Boolean =
         context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(KEY_SHOW_SPLASH, true)
@@ -63,7 +73,7 @@ object UiSettingsStore {
     }
 
     fun hideNonStandardVersions(context: Context): Boolean =
-        context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(KEY_HIDE_NON_STANDARD, false)
+        context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(KEY_HIDE_NON_STANDARD, true)
 
     fun setHideNonStandardVersions(context: Context, value: Boolean) {
         context.getSharedPreferences(PREF, Context.MODE_PRIVATE)

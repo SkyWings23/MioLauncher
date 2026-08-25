@@ -93,7 +93,7 @@ object ModJarReader {
     // ---------- 各格式解析 ----------
 
     private fun readText(zf: ZipFile, name: String): String =
-        zf.getInputStream(zf.getEntry(name)).use { it.readBytes().toString(Charsets.UTF_8) }
+        zf.getInputStream(zf.getEntry(name)).use { String(it.readBytes(), Charsets.UTF_8) }
 
     private fun parseFabric(text: String): ModJarMeta? {
         val root = gson.fromJson(text, JsonObject::class.java) ?: return null

@@ -36,6 +36,8 @@ dependencies {
     // HMCLCore dependencies
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("org.glavo.kala:kala-compress-archivers-zip:1.27.1-3")
+    // 自打包的 jdk.zipfs 替代（Android ART 无 zipfs，提供 FileSystemProvider）
+    implementation(files("libs/zipfs.jar"))
     implementation("org.glavo.kala:kala-compress-archivers-tar:1.27.1-3")
     implementation("org.glavo:kala-encoding-detector:0.1.0")
     implementation("org.glavo:simple-png-javafx:0.3.0")
@@ -50,7 +52,8 @@ dependencies {
     implementation("org.glavo:pci-ids:0.4.0")
     implementation("org.glavo:HelloNBT:0.4.0")
     implementation("org.glavo:weburl:0.2.0")
-    implementation("org.glavo:uuid-tools:0.2.0")
+    // org.glavo:uuid-tools 0.2.0 使用 VarHandle 字节码，D8 反糖化后部分设备 ART 验证失败
+    // （VerifyError: byte[] vs Object[]），已用内置 org/glavo/uuid/UUIDs.java 兼容实现替代
     implementation("org.commonmark:commonmark:0.27.1")
     implementation("org.commonmark:commonmark-ext-autolink:0.27.1")
     implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.27.1")

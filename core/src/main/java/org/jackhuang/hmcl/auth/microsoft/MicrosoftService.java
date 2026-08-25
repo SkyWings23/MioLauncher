@@ -54,7 +54,8 @@ import static org.jackhuang.hmcl.util.Pair.pair;
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 public class MicrosoftService {
-    private static final String SCOPE = "XboxLive.signin offline_access";
+    // 老 live.com 端点（FCL/Pojav 同款）的 scope 格式；v2.0 的 "XboxLive.signin offline_access" 只对 v2.0 端点有效。
+    private static final String SCOPE = "service::user.auth.xboxlive.com::MBI_SSL";
     private static final ThreadPoolExecutor POOL = threadPool("MicrosoftProfileProperties", true, 2, 10,
             TimeUnit.SECONDS);
 
@@ -120,29 +121,41 @@ public class MicrosoftService {
         XBoxLiveAuthenticationResponse xboxResponse, minecraftXstsResponse;
         try {
             // Authenticate with XBox Live
-            xboxResponse = HttpRequest
-                    .POST("https://user.auth.xboxlive.com/user/authenticate")
-                    .json(mapOf(
-                            pair("Properties",
-                                    mapOf(pair("AuthMethod", "RPS"), pair("SiteName", "user.auth.xboxlive.com"),
-                                            pair("RpsTicket", "d=" + liveAccessToken))),
-                            pair("RelyingParty", "http://auth.xboxlive.com"), pair("TokenType", "JWT")))
-                    .retry(5)
-                    .accept("application/json")
-                    .getJson(XBoxLiveAuthenticationResponse.class);
+            try {
+                xboxResponse = HttpRequest
+                        .POST("https://user.auth.xboxlive.com/user/authenticate")
+                        .json(mapOf(
+                                pair("Properties",
+                                        mapOf(pair("AuthMethod", "RPS"), pair("SiteName", "user.auth.xboxlive.com"),
+                                                pair("RpsTicket", "d=" + liveAccessToken))),
+                                pair("RelyingParty", "http://auth.xboxlive.com"), pair("TokenType", "JWT")))
+                        .retry(5)
+                        .accept("application/json")
+                        .getJson(XBoxLiveAuthenticationResponse.class);
+            } catch (org.jackhuang.hmcl.util.io.ResponseCodeException e) {
+                throw e;
+            } catch (IOException e) {
+                throw new ServerDisconnectException("Xbox Live 认证失败（网络异常），请检查网络后重试", e);
+            }
 
             uhs = getUhs(xboxResponse, null);
 
-            minecraftXstsResponse = HttpRequest
-                    .POST("https://xsts.auth.xboxlive.com/xsts/authorize")
-                    .json(mapOf(
-                            pair("Properties",
-                                    mapOf(pair("SandboxId", "RETAIL"),
-                                            pair("UserTokens", Collections.singletonList(xboxResponse.token)))),
-                            pair("RelyingParty", "rp://api.minecraftservices.com/"), pair("TokenType", "JWT")))
-                    .ignoreHttpErrorCode(401)
-                    .retry(5)
-                    .getJson(XBoxLiveAuthenticationResponse.class);
+            try {
+                minecraftXstsResponse = HttpRequest
+                        .POST("https://xsts.auth.xboxlive.com/xsts/authorize")
+                        .json(mapOf(
+                                pair("Properties",
+                                        mapOf(pair("SandboxId", "RETAIL"),
+                                                pair("UserTokens", Collections.singletonList(xboxResponse.token)))),
+                                pair("RelyingParty", "rp://api.minecraftservices.com/"), pair("TokenType", "JWT")))
+                        .ignoreHttpErrorCode(401)
+                        .retry(5)
+                        .getJson(XBoxLiveAuthenticationResponse.class);
+            } catch (org.jackhuang.hmcl.util.io.ResponseCodeException e) {
+                throw e;
+            } catch (IOException e) {
+                throw new ServerDisconnectException("Xbox 账号授权失败（网络异常），请检查网络后重试", e);
+            }
         } catch (ResponseCodeException e) {
             if (e.getResponseCode() == 400) {
                 throw new XBox400Exception();
@@ -154,11 +167,16 @@ public class MicrosoftService {
         getUhs(minecraftXstsResponse, uhs);
 
         // Authenticate with Minecraft
-        MinecraftLoginWithXBoxResponse minecraftResponse = HttpRequest
-                .POST("https://api.minecraftservices.com/authentication/login_with_xbox")
-                .json(mapOf(pair("identityToken", "XBL3.0 x=" + uhs + ";" + minecraftXstsResponse.token)))
-                .retry(5)
-                .accept("application/json").getJson(MinecraftLoginWithXBoxResponse.class);
+        MinecraftLoginWithXBoxResponse minecraftResponse;
+        try {
+            minecraftResponse = HttpRequest
+                    .POST("https://api.minecraftservices.com/authentication/login_with_xbox")
+                    .json(mapOf(pair("identityToken", "XBL3.0 x=" + uhs + ";" + minecraftXstsResponse.token)))
+                    .retry(5)
+                    .accept("application/json").getJson(MinecraftLoginWithXBoxResponse.class);
+        } catch (IOException e) {
+            throw new ServerDisconnectException("Minecraft 登录失败（网络异常），请检查网络后重试", e);
+        }
 
         long notAfter = minecraftResponse.expiresIn * 1000L + System.currentTimeMillis();
 

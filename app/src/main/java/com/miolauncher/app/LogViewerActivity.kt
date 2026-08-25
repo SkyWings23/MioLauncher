@@ -8,7 +8,6 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,7 +51,6 @@ import com.miolauncher.app.ui.theme.MioLauncherTheme
 class LogViewerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         val title = intent.getStringExtra("title") ?: "日志"
         val exportName = intent.getStringExtra("export_name") ?: "mio-log.txt"
         // 从文件读取内容（避免 Intent 传大文本的 Binder 限制）

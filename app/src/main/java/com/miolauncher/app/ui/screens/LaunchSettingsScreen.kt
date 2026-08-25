@@ -347,7 +347,7 @@ fun LaunchSettingsScreen(
             SliderSetting(
                 label = "$simDist 区块",
                 value = simDist,
-                range = 2..16,
+                range = 5..16,
                 onValueChange = { simDist = it; markCustom() },
             )
             Spacer(Modifier.height(4.dp))

@@ -67,6 +67,21 @@ public final class GameLaunch {
     public static List<String> buildCommand(
             Context context, File gameDir, String versionId, String username,
             int windowW, int windowH, int maxMemoryMb, String serverAddress) throws Exception {
+        return buildCommand(context, gameDir, versionId, username, windowW, windowH, maxMemoryMb, serverAddress,
+                (String) null, (String) null, "legacy", "{}");
+    }
+
+    /**
+     * 生成游戏启动参数（完整认证信息版，支持 LittleSkin 外置登录）。
+     * @param accessToken 登录后的 accessToken（离线时为 "0"）
+     * @param uuid        玩家 UUID（离线时随机）
+     * @param userType    mojang / legacy / msa
+     * @param userProperties 用户属性 JSON（外置登录服务器返回）
+     */
+    public static List<String> buildCommand(
+            Context context, File gameDir, String versionId, String username,
+            int windowW, int windowH, int maxMemoryMb, String serverAddress,
+            String accessToken, String uuid, String userType, String userProperties) throws Exception {
         DefaultGameRepository repository = new DefaultGameRepository(gameDir.toPath());
         repository.refresh();
         GameInstanceID id = new GameInstanceID(versionId);
@@ -131,14 +146,48 @@ public final class GameLaunch {
         }
         LaunchOptions options = builder.create();
 
-        AuthInfo authInfo = new AuthInfo(
-                username, UUID.randomUUID(), "0", "legacy", "{}");
+        AuthInfo authInfo;
+        if (accessToken != null && uuid != null && !accessToken.equals("0")) {
+            // 外置登录（LittleSkin）：用真实 accessToken + uuid
+            java.util.UUID realUuid = safeParseUuid(uuid);
+            authInfo = new AuthInfo(username, realUuid, accessToken,
+                    userType == null || userType.isBlank() ? "mojang" : userType,
+                    userProperties == null ? "{}" : userProperties);
+        } else {
+            // 离线模式：用用户名生成稳定 UUID（与官方离线模式/常见服务器一致），
+            // 避免每次启动随机 UUID 导致多人服务器/插件不认会话（"玩不了多人"）。
+            authInfo = new AuthInfo(
+                    username, offlineUuid(username), "0", "legacy", "{}");
+        }
 
         DefaultLauncher launcher = new DefaultLauncher(
                 repository, repository.getResolvedInstanceManifest(id).launchManifest(),
                 authInfo, options, (ProcessListener) null);
 
         return launcher.buildRawCommand();
+    }
+
+    /** 离线模式稳定 UUID：与官方离线登录一致（nameUUIDFromBytes("OfflinePlayer:"+name)）。 */
+    private static java.util.UUID offlineUuid(String username) {
+        try {
+            return java.util.UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            return java.util.UUID.randomUUID();
+        }
+    }
+
+    private static java.util.UUID safeParseUuid(String uuid) {
+        try {
+            return java.util.UUID.fromString(uuid);
+        } catch (Exception e) {
+            // 兼容无连字符的 UUID
+            try {
+                return java.util.UUID.fromString(uuid.replaceFirst(
+                        "(\\w{8})(\\w{4})(\\w{4})(\\w{4})(\\w{12})", "$1-$2-$3-$4-$5"));
+            } catch (Exception e2) {
+                return java.util.UUID.randomUUID();
+            }
+        }
     }
 
     /**
@@ -184,7 +233,7 @@ public final class GameLaunch {
             android.util.Log.i("MioGame", "resolve javaMajor: versionId=" + versionId + " declaredJavaVersion="
                     + (m.javaVersion() == null ? "null" : m.javaVersion().toString()) + " mv=" + mv);
             if (mv >= 25) javaMajor = 25;       // 26.x 等需要 Java 25
-            else if (mv >= 17) javaMajor = 21;  // 17..24 用 Java 21（更高类文件由 25 处理）
+            else if (mv >= 17) javaMajor = 21;  // 17..24 用 Java 21（jre21 在 Android 上稳定，jre25 在旧设备有 StrToI 崩溃）
             else if (mv >= 9) javaMajor = 17;   // 9..16 用 Java 17
             else if (mv > 0) javaMajor = 8;     // Java 6/8 老版本用 Java 8
             // mv == 0（版本 JSON 无 javaVersion 声明）：老版本按版本号推断
@@ -267,6 +316,31 @@ public final class GameLaunch {
         // 关键：JVM 参数必须插在主类之前，否则会被当作游戏参数忽略。
         List<String> src = rawCommand.subList(1, rawCommand.size());
         List<String> extra = new ArrayList<>();
+        // authlib-injector：外置登录（LittleSkin 等 Yggdrasil 服务）必须注入，否则
+        // 游戏仍请求 Mojang 官方 sessionserver，联机校验失败、皮肤不显示。
+        // 判定：游戏参数含 --userType mojang 且 --accessToken 为真实令牌（离线为 "0"/"legacy"）。
+        boolean isExternalLogin = false;
+        for (int i = 0; i + 1 < src.size(); i++) {
+            String a = src.get(i);
+            if ("--userType".equals(a) && "mojang".equals(src.get(i + 1))) {
+                for (int j = 0; j + 1 < src.size(); j++) {
+                    if ("--accessToken".equals(src.get(j)) && !"0".equals(src.get(j + 1))
+                            && !src.get(j + 1).isBlank()) {
+                        isExternalLogin = true;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        if (isExternalLogin) {
+            File authlib = new File(runtimeDir, "authlib-injector.jar");
+            if (authlib.isFile()) {
+                extra.add("-javaagent:" + authlib.getAbsolutePath() + "=https://littleskin.cn/api/yggdrasil");
+            } else {
+                android.util.Log.w("MioGame", "authlib-injector.jar missing, external login won't validate");
+            }
+        }
         // 离线可玩：authlib/Yggdrasil 访问 Mojang 服务器（api.minecraftservices.com 等）在部分网络连不上，
         // 默认会长时间阻塞导致卡加载界面。这里强制极短超时让请求快速失败，游戏可离线进主菜单。
         extra.add("-Dsun.net.client.defaultConnectTimeout=3000");
@@ -372,6 +446,10 @@ public final class GameLaunch {
         extra.add("-Dfile.encoding=UTF-8");
         extra.add("-Dstdout.encoding=UTF-8");
         extra.add("-Dstderr.encoding=UTF-8");
+        // Java 18+ 的 file.encoding 不再自动映射 sun.jnu.encoding/native.encoding，
+        // 不设会在 DNS 解析（InetAddress）时报 "platform encoding not initialized"。
+        extra.add("-Dsun.jnu.encoding=UTF-8");
+        extra.add("-Dnative.encoding=UTF-8");
         // 对齐 FCL：java.io.tmpdir（Android 无 /tmp）、os、用户 locale、JNA
         File cacheDir = new File(context.getCacheDir(), "miojvm");
         cacheDir.mkdirs();
@@ -381,6 +459,10 @@ public final class GameLaunch {
         extra.add("-Duser.language=zh");
         extra.add("-Duser.country=CN");
         extra.add("-Duser.timezone=Asia/Shanghai");
+        // 禁止 oshi 加载 Udev（避免触发 JNA native 加载，部分设备如华为/麒麟上 libjnidispatch.so
+        // 加载或版本校验会崩溃，导致游戏启动闪退）。oshi 的 CPU 探测在 Android 上本就不可靠，
+        // 由 OshiPatch 跳过命令执行，这里关闭 Udev 依赖即可。
+        extra.add("-Doshi.os.linux.allowudev=false");
         // JNA（oshi 依赖）在 Android 上无法加载桌面版原生库（glibc 的 libc.so.6），
         // 这里让 JNA 优先从 APK 内置的 Bionic 版 libjnidispatch.so（backend jniLibs 提供）
         // 加载，使 oshi 的 CPU/内存探测正常，避免部分版本启动崩溃。
@@ -401,6 +483,15 @@ public final class GameLaunch {
             android.util.Log.w("MioGame", "write resolv.conf failed", e);
         }
         extra.add("-javaagent:" + mioLibPatcher.getAbsolutePath());
+        // OshiPatch：oshi 在 Android 上会执行 lshw 等外部命令探测 CPU，这些命令在
+        // libpojavexec 的 forkAndExec hook 下空指针崩溃（SIGSEGV in libjava.so）。
+        // 直接 patch oshi.util.ExecutingCommand.runNative 返回空，跳过一切命令执行。
+        // 注意：OshiPatch.jar 为 Java 17 字节码（class 61.0），JRE 8（52.0）加载会抛
+        // UnsupportedClassVersionError 导致整个 JVM 启动失败，故 Java 8 下跳过。
+        File oshiPatch = new File(runtimeDir, "OshiPatch.jar");
+        if (oshiPatch.isFile() && javaMajor >= 9) {
+            extra.add("-javaagent:" + oshiPatch.getAbsolutePath());
+        }
         // MioLauncher: 干净退出清理 agent——游戏正常退出时删除崩溃标记，避免误报崩溃；
         // 真实崩溃（信号）不跑 shutdown hook，标记保留供启动时检测。
         // Java 8：MioExitAgent 为 Java 17 字节码无法加载，跳过。
@@ -411,6 +502,8 @@ public final class GameLaunch {
             extra.add("-javaagent:" + mioExitAgent.getAbsolutePath());
             extra.add("-Dmio.crash.marker=" + new File(context.getFilesDir(), "mio/game/.mio_crash_marker").getAbsolutePath());
         }
+        // 陶瓦联机：游戏主菜单"陶瓦联机"按钮点击后写此标记文件，启动器据此切到联机页
+        extra.add("-Dmio.terracotta.marker=" + new File(context.getFilesDir(), "mio/terracotta_switch").getAbsolutePath());
         // 调试：DumpAgent 在 JVM 内轮询标记文件 dump 全部线程栈
         File dumpAgent = new File(runtimeDir, "DumpAgent.jar");
         if (dumpAgent.isFile()) {
@@ -649,8 +742,12 @@ public final class GameLaunch {
         int rw = windowW;
         int rh = windowH;
         int maxFps = cfg.maxFps <= 0 ? 100000 : cfg.maxFps;
-        // 模拟距离不能超过渲染距离：否则超出视野的实体仍被 tick，白耗 CPU 导致掉帧
-        int simDist = Math.min(cfg.simulationDistance, Math.max(2, cfg.renderDistance));
+        // 模拟距离不能超过渲染距离：否则超出视野的实体仍被 tick，白耗 CPU 导致掉帧。
+        // 注意 MC 1.18+ simulationDistance 最小值为 5，压到 4 会被游戏拒绝（"Value 4 outside of range [5:33]"）。
+        int simDist = Math.max(5, Math.min(cfg.simulationDistance, Math.max(5, cfg.renderDistance)));
+        // FOV 合法范围（MC 1.21 为 30..110）：游戏内写入异常值（如 2870）会导致解析错乱，
+        // 这里统一钳制到合法区间，防御 options.txt 被污染。
+        int fovClamped = Math.max(30, Math.min(cfg.fov, 110));
         String[][] targets = {
                 {"lang:", "lang:" + (cfg.lang == null || cfg.lang.isEmpty() ? "zh_cn" : cfg.lang)},
                 {"guiScale:", "guiScale:" + cfg.guiScale},
@@ -659,7 +756,7 @@ public final class GameLaunch {
                 {"maxFps:", "maxFps:" + maxFps},
                 {"overrideWidth:", "overrideWidth:" + rw},
                 {"overrideHeight:", "overrideHeight:" + rh},
-                {"fov:", "fov:" + cfg.fov},
+                {"fov:", "fov:" + fovClamped},
                 {"ao:", "ao:false"},
                 {"mipmapLevels:", "mipmapLevels:0"},
                 {"particles:", "particles:" + cfg.particles},
@@ -672,8 +769,10 @@ public final class GameLaunch {
             boolean found = false;
             for (String line : lines) {
                 if (line.startsWith(t[0])) {
-                    out.add(t[1]);
-                    found = true;
+                    if (!found) {
+                        out.add(t[1]);
+                        found = true;
+                    }
                 } else {
                     out.add(line);
                 }

@@ -57,12 +57,20 @@ public final class JRE {
     public static boolean isInstalled(Context context, int javaMajor) {
         File jre = jreDir(context, javaMajor);
         if (!jre.isDirectory() || !new File(jre, "lib/server/libjvm.so").exists()) return false;
+        // 完整性校验：损坏/截断的 JRE（文件存在但尺寸异常）会通过旧的存在性检查，
+        // 导致游戏启动时 JVM 创建失败（"Java环境已损坏"）。加最小尺寸阈值，
+        // 不满足视为未安装 → 触发重新解压自愈。
+        File jvm = new File(jre, "lib/server/libjvm.so");
+        if (jvm.length() < 1024 * 1024) return false;
         // Java 9+ 有 lib/modules；Java 8 用 lib/rt.jar（可能被 pack 为 .pack）
         if (javaMajor >= 9) {
-            return new File(jre, "lib/modules").exists();
+            File modules = new File(jre, "lib/modules");
+            return modules.exists() && modules.length() >= 5 * 1024 * 1024;
         } else {
-            return new File(jre, "lib/rt.jar").exists()
-                    || new File(jre, "lib/rt.jar.pack").exists();
+            File rt = new File(jre, "lib/rt.jar");
+            File rtPack = new File(jre, "lib/rt.jar.pack");
+            return (rt.exists() && rt.length() >= 10 * 1024 * 1024)
+                    || (rtPack.exists() && rtPack.length() >= 10 * 1024 * 1024);
         }
     }
 
@@ -80,6 +88,22 @@ public final class JRE {
         }
     }
 
+    /**
+     * 强制重装默认 JRE（自愈损坏的 Java 环境）。
+     * 删除现有目录后重新从 assets 解压；失败返回异常信息，成功返回 null。
+     */
+    public static String repairJre(Context context) {
+        try {
+            File dir = jreDir(context, DEFAULT_JAVA_MAJOR);
+            deleteRecursively(dir);
+            deleteRecursively(new File(context.getFilesDir(), "mio/jre" + DEFAULT_JAVA_MAJOR + ".tmp"));
+            install(context, DEFAULT_JAVA_MAJOR, null);
+            return isInstalled(context, DEFAULT_JAVA_MAJOR) ? null : "重装后校验仍失败";
+        } catch (Exception e) {
+            return "重装 Java 环境失败：" + e.getMessage();
+        }
+    }
+
     /** 运行时资源目录（lwjgl.jar / MioLibPatcher.jar 解压到这里）。 */
     public static File getRuntimeDir(Context context) {
         File dir = new File(context.getFilesDir(), "mio/runtime");
@@ -93,7 +117,8 @@ public final class JRE {
     public static void extractRuntime(Context context) throws Exception {
         File dir = getRuntimeDir(context);
         String[] files = {
-                "runtime/lwjgl.jar", "runtime/lwjglx.jar", "runtime/MioLibPatcher.jar", "runtime/MioExitAgent.jar", "runtime/DumpAgent.jar",
+                "runtime/lwjgl.jar", "runtime/lwjglx.jar", "runtime/MioLibPatcher.jar", "runtime/OshiPatch.jar", "runtime/MioExitAgent.jar", "runtime/DumpAgent.jar",
+                "runtime/authlib-injector.jar",
                 "runtime/caciocavallo17/cacio-agent.jar",
                 "runtime/caciocavallo17/cacio-shared-1.19.1-SNAPSHOT.jar",
                 "runtime/caciocavallo17/cacio-tta-1.19.1-SNAPSHOT.jar",
@@ -109,7 +134,10 @@ public final class JRE {
             } else {
                 out = new File(dir, name);
             }
-            if (out.isFile() && out.length() > 0) continue;
+            // 运行时 agent jar（OshiPatch/MioLibPatcher 等）每次覆盖，确保 APK 更新后生效；
+            // caciocavallo 等大文件只在缺失时解压。
+            boolean force = !asset.startsWith("runtime/caciocavallo");
+            if (!force && out.isFile() && out.length() > 0) continue;
             out.getParentFile().mkdirs();
             try (InputStream in = context.getAssets().open(asset);
                  java.io.FileOutputStream fos = new java.io.FileOutputStream(out)) {
@@ -445,6 +473,92 @@ public final class JRE {
         fullArgs.add("-Djava.home=" + jre);
         fullArgs.addAll(args);
         System.out.println("MioJRE: launching server JVM");
+        return com.oracle.dalvik.VMLauncher.launchJVM(fullArgs.toArray(new String[0]));
+    }
+
+    /**
+     * 在进程内运行任意 Java 程序（JLI_Launch，规避 SELinux 禁止 exec app 目录二进制）。
+     *
+     * <p>与 {@link #launchServer} 的差别：不重定向 stdout/stderr 到日志文件、
+     * 不切换工作目录，纯运行 {@code java -cp <classpath> <mainClass> <args>}，
+     * 用于 Forge/NeoForge 安装处理器等需要真实 JVM 的场景。</p>
+     *
+     * @param args java 命令行参数（不含 java 本身），如
+     *             {"-cp", "a.jar:b.jar", "net.minecraftforge.installer.SimpleInstaller", "install", ...}
+     * @return JLI_Launch 返回码（0 表示成功）
+     */
+    public static int launchJava(Context context, List<String> args) throws Exception {
+        File jreHome = getJreHome(context);
+        if (jreHome == null) {
+            throw new IllegalStateException("JRE 未安装");
+        }
+        String nativeDir = context.getApplicationInfo().nativeLibraryDir;
+
+        // 最小环境：JAVA_HOME / LD_LIBRARY_PATH / PATH / DALVIK
+        Os.setenv("JAVA_HOME", jreHome.getAbsolutePath(), true);
+        String libDir = jreHome.getAbsolutePath() + "/lib";
+        String ld = jreHome.getAbsolutePath() + "/lib/server" + ":" + libDir
+                + ":" + jreHome.getAbsolutePath() + "/lib/jli" + ":" + nativeDir;
+        String oldLd = System.getenv("LD_LIBRARY_PATH");
+        if (oldLd != null && !oldLd.isEmpty()) ld = ld + ":" + oldLd;
+        Os.setenv("LD_LIBRARY_PATH", ld, true);
+        Os.setenv("PATH", jreHome.getAbsolutePath() + "/bin", true);
+
+        System.loadLibrary("pojavexec");
+        net.kdt.pojavlaunch.utils.JREUtils.setDalvikJavaVM();
+        long artVm = net.kdt.pojavlaunch.Tools.getJavaVMPointer();
+        Os.setenv("DALVIK_JAVAVM", Long.toHexString(artVm), true);
+        Os.setenv("DALVIK_APPLICATION", context.getPackageName(), true);
+
+        // 预加载 JVM 核心库（按依赖顺序：底层库在前）
+        String jre = jreHome.getAbsolutePath();
+        String libRoot = jre + "/lib";
+        preload(jre + "/lib/libjli.so");
+        preload(libRoot + "/jli/libjli.so");
+        preload(jre + "/lib/server/libjvm.so");
+        preload(libRoot + "/server/libjvm.so");
+        String[] coreLibs = {
+            "libverify.so", "libzip.so", "libjimage.so", "libextnet.so",
+            "libjava.so", "libnet.so", "libnio.so",
+            "libsunec.so", "libjsig.so", "libinstrument.so", "libj2pkcs11.so",
+            "libj2gss.so", "libprefs.so", "librmi.so", "libsctp.so",
+            "libdt_socket.so", "libjdwp.so", "libsyslookup.so",
+            "libunpack.so",
+        };
+        for (String lib : coreLibs) {
+            preload(libRoot + "/" + lib);
+        }
+        // 失败的库重试（依赖可能由后续库补齐）
+        for (String lib : coreLibs) {
+            preload(libRoot + "/" + lib);
+        }
+        File libDirFile = new File(jreHome, "lib");
+        File[] libs = libDirFile.listFiles((dir, name) -> name.endsWith(".so"));
+        if (libs != null) {
+            for (File f : libs) preload(f.getAbsolutePath());
+        }
+
+        // 捕获 JLI JVM stdout/stderr 到日志文件（进程内 JVM 输出默认不进 logcat）
+        try {
+            File logDir = new File(context.getFilesDir(), "mio/logs");
+            logDir.mkdirs();
+            File logFile = new File(logDir, "forge-processor.log");
+            net.kdt.pojavlaunch.utils.JREUtils.redirectStdout(logFile.getAbsolutePath());
+        } catch (Throwable t) {
+            System.out.println("MioJRE: redirect failed: " + t);
+        }
+        // 设置 exit trap（防止 JLI JVM 退出时 SIGABRT 二次 SIGSEGV 挂死）
+        try {
+            net.kdt.pojavlaunch.utils.JREUtils.setupExitMethod(context);
+        } catch (Throwable t) {
+            System.out.println("MioJRE: setupExitMethod failed: " + t);
+        }
+
+        List<String> fullArgs = new ArrayList<>();
+        fullArgs.add(jre + "/lib/java");
+        fullArgs.add("-Djava.home=" + jre);
+        fullArgs.addAll(args);
+        System.out.println("MioJRE: launching Java program: " + String.join(" ", args));
         return com.oracle.dalvik.VMLauncher.launchJVM(fullArgs.toArray(new String[0]));
     }
 

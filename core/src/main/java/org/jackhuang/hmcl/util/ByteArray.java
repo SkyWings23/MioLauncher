@@ -1,6 +1,6 @@
 /*
  * Hello Minecraft! Launcher
- * Copyright (C) 2025 huangyuhui <huanghongxun2008@126.com> and contributors
+ * Copyright (C) 2020  huangyuhui <huanghongxun2008@126.com> and contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,25 +15,18 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+
+/*
+ * 说明：原实现用 java.lang.invoke.VarHandle 做字节序读写。D8 对 VarHandle 的
+ * 签名多态方法（get/set + 基元 cast）去糖后生成无效字节码，在 Android 上触发
+ * VerifyError（register v4 has type X but expected Object），导致下载/资产解析崩溃。
+ * 这里改为纯 Java 位运算，无任何 invokedynamic/VarHandle，D8 可正确编译。
+ */
 package org.jackhuang.hmcl.util;
 
-import java.lang.invoke.VarHandle;
-
-import static java.lang.invoke.MethodHandles.byteArrayViewVarHandle;
-import static java.nio.ByteOrder.BIG_ENDIAN;
-import static java.nio.ByteOrder.LITTLE_ENDIAN;
-
-/**
- * @author Glavo
- */
 public final class ByteArray {
-    private static final VarHandle SHORT_LE = byteArrayViewVarHandle(short[].class, LITTLE_ENDIAN);
-    private static final VarHandle INT_LE = byteArrayViewVarHandle(int[].class, LITTLE_ENDIAN);
-    private static final VarHandle LONG_LE = byteArrayViewVarHandle(long[].class, LITTLE_ENDIAN);
-
-    private static final VarHandle SHORT_BE = byteArrayViewVarHandle(short[].class, BIG_ENDIAN);
-    private static final VarHandle INT_BE = byteArrayViewVarHandle(int[].class, BIG_ENDIAN);
-    private static final VarHandle LONG_BE = byteArrayViewVarHandle(long[].class, BIG_ENDIAN);
+    private ByteArray() {
+    }
 
     // Get
 
@@ -46,7 +39,7 @@ public final class ByteArray {
     }
 
     public static short getShortLE(byte[] array, int offset) {
-        return (short) SHORT_LE.get(array, offset);
+        return (short) ((array[offset] & 0xff) | ((array[offset + 1] & 0xff) << 8));
     }
 
     public static int getUnsignedShortLE(byte[] array, int offset) {
@@ -54,7 +47,7 @@ public final class ByteArray {
     }
 
     public static short getShortBE(byte[] array, int offset) {
-        return (short) SHORT_BE.get(array, offset);
+        return (short) (((array[offset] & 0xff) << 8) | (array[offset + 1] & 0xff));
     }
 
     public static int getUnsignedShortBE(byte[] array, int offset) {
@@ -62,7 +55,10 @@ public final class ByteArray {
     }
 
     public static int getIntLE(byte[] array, int offset) {
-        return (int) INT_LE.get(array, offset);
+        return (array[offset] & 0xff)
+                | ((array[offset + 1] & 0xff) << 8)
+                | ((array[offset + 2] & 0xff) << 16)
+                | ((array[offset + 3] & 0xff) << 24);
     }
 
     public static long getUnsignedIntLE(byte[] array, int offset) {
@@ -70,7 +66,10 @@ public final class ByteArray {
     }
 
     public static int getIntBE(byte[] array, int offset) {
-        return (int) INT_BE.get(array, offset);
+        return ((array[offset] & 0xff) << 24)
+                | ((array[offset + 1] & 0xff) << 16)
+                | ((array[offset + 2] & 0xff) << 8)
+                | (array[offset + 3] & 0xff);
     }
 
     public static long getUnsignedIntBE(byte[] array, int offset) {
@@ -78,11 +77,13 @@ public final class ByteArray {
     }
 
     public static long getLongLE(byte[] array, int offset) {
-        return (long) LONG_LE.get(array, offset);
+        return (getIntLE(array, offset) & 0xffff_ffffL)
+                | ((getIntLE(array, offset + 4) & 0xffff_ffffL) << 32);
     }
 
     public static long getLongBE(byte[] array, int offset) {
-        return (long) LONG_BE.get(array, offset);
+        return (getIntBE(array, offset) & 0xffff_ffffL)
+                | ((getIntBE(array, offset + 4) & 0xffff_ffffL) << 32);
     }
 
     // Set
@@ -96,7 +97,8 @@ public final class ByteArray {
     }
 
     public static void setShortLE(byte[] array, int offset, short value) {
-        SHORT_LE.set(array, offset, value);
+        array[offset] = (byte) (value & 0xff);
+        array[offset + 1] = (byte) ((value >>> 8) & 0xff);
     }
 
     public static void setUnsignedShortLE(byte[] array, int offset, int value) {
@@ -104,7 +106,8 @@ public final class ByteArray {
     }
 
     public static void setShortBE(byte[] array, int offset, short value) {
-        SHORT_BE.set(array, offset, value);
+        array[offset] = (byte) ((value >>> 8) & 0xff);
+        array[offset + 1] = (byte) (value & 0xff);
     }
 
     public static void setUnsignedShortBE(byte[] array, int offset, int value) {
@@ -112,7 +115,10 @@ public final class ByteArray {
     }
 
     public static void setIntLE(byte[] array, int offset, int value) {
-        INT_LE.set(array, offset, value);
+        array[offset] = (byte) (value & 0xff);
+        array[offset + 1] = (byte) ((value >>> 8) & 0xff);
+        array[offset + 2] = (byte) ((value >>> 16) & 0xff);
+        array[offset + 3] = (byte) ((value >>> 24) & 0xff);
     }
 
     public static void setUnsignedIntLE(byte[] array, int offset, long value) {
@@ -120,7 +126,10 @@ public final class ByteArray {
     }
 
     public static void setIntBE(byte[] array, int offset, int value) {
-        INT_BE.set(array, offset, value);
+        array[offset] = (byte) ((value >>> 24) & 0xff);
+        array[offset + 1] = (byte) ((value >>> 16) & 0xff);
+        array[offset + 2] = (byte) ((value >>> 8) & 0xff);
+        array[offset + 3] = (byte) (value & 0xff);
     }
 
     public static void setUnsignedIntBE(byte[] array, int offset, long value) {
@@ -128,13 +137,12 @@ public final class ByteArray {
     }
 
     public static void setLongLE(byte[] array, int offset, long value) {
-        LONG_LE.set(array, offset, value);
+        setIntLE(array, offset, (int) (value & 0xffff_ffffL));
+        setIntLE(array, offset + 4, (int) ((value >>> 32) & 0xffff_ffffL));
     }
 
     public static void setLongBE(byte[] array, int offset, long value) {
-        LONG_BE.set(array, offset, value);
-    }
-
-    private ByteArray() {
+        setIntBE(array, offset, (int) ((value >>> 32) & 0xffff_ffffL));
+        setIntBE(array, offset + 4, (int) (value & 0xffff_ffffL));
     }
 }

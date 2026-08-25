@@ -29,6 +29,8 @@ import org.jetbrains.annotations.Nullable;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URI;
@@ -72,7 +74,9 @@ public class CacheRepository {
                 try (FileChannel channel = FileChannel.open(indexFile, StandardOpenOption.READ);
                      @SuppressWarnings("unused") FileLock lock = channel.tryLock(0, Long.MAX_VALUE, true)) {
                     FileTime lastModified = Lang.ignoringException(() -> Files.getLastModifiedTime(indexFile));
-                    ETagIndex raw = JsonUtils.GSON.fromJson(new BufferedReader(Channels.newReader(channel, UTF_8)), ETagIndex.class);
+                    // 用 InputStreamReader 包裹（Channels.newReader(ReadableByteChannel, Charset) 是 Java 10+ API，
+                    // Android 12/API 31 上不存在会 NoSuchMethodError 崩溃）
+                    ETagIndex raw = JsonUtils.GSON.fromJson(new BufferedReader(new InputStreamReader(Channels.newInputStream(channel), UTF_8)), ETagIndex.class);
                     index = raw != null ? joinETagIndexes(raw.eTag) : new LinkedHashMap<>();
                     indexFileLastModified = lastModified;
                 }
@@ -80,7 +84,8 @@ public class CacheRepository {
                 index = new LinkedHashMap<>();
                 indexFileLastModified = null;
             }
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            // catch Throwable：NoSuchMethodError（Java 10+ API 在低版本 Android 缺失）等 Error 也会导致启动闪退
             LOG.warning("Unable to read index file", e);
             index = new LinkedHashMap<>();
             indexFileLastModified = null;
@@ -343,19 +348,19 @@ public class CacheRepository {
                 try {
                     ETagIndex indexOnDisk = GSON.fromJson(
                             // Should not be closed
-                            new BufferedReader(Channels.newReader(channel, UTF_8)),
+                            new BufferedReader(new InputStreamReader(Channels.newInputStream(channel), UTF_8)),
                             ETagIndex.class
                     );
                     if (indexOnDisk != null) {
                         index = joinETagIndexes(index.values(), indexOnDisk.eTag);
                         indexFileLastModified = lastModified;
                     }
-                } catch (JsonSyntaxException ignored) {
+                } catch (Throwable ignored) {
                 }
             }
 
             channel.truncate(0);
-            BufferedWriter writer = new BufferedWriter(Channels.newWriter(channel, UTF_8));
+            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(Channels.newOutputStream(channel), UTF_8));
             JsonUtils.GSON.toJson(new ETagIndex(index.values()), writer);
             writer.flush();
             channel.force(true);

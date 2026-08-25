@@ -594,7 +594,11 @@ public final class StringUtils {
     }
 
     public static String repeats(char ch, int repeat) {
-        return String.valueOf(ch).repeat(Math.max(0, repeat));
+        // Android 的 String 没有 repeat()（Java 11+ API），用 StringBuilder 兼容
+        int n = Math.max(0, repeat);
+        StringBuilder sb = new StringBuilder(n);
+        for (int i = 0; i < n; i++) sb.append(ch);
+        return sb.toString();
     }
 
     public static String truncate(String str, int limit) {

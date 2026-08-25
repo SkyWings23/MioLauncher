@@ -131,7 +131,14 @@ public class ForgeNewInstallTask extends Task<GameInstancePatch> {
                 throw new Exception("Game processor jar does not have main class " + jar);
 
             List<String> command = new ArrayList<>();
-            command.add(JavaRuntime.getDefault().getBinary().toString());
+            // Android 上优先使用启动器内置 JRE 的 java（mio.forge.java 由 MioRepository 在安装前设置），
+            // 否则 JavaRuntime.getDefault() 在 app 进程（ART）里返回无效路径导致 exec 崩溃。
+            String forgeJava = System.getProperty("mio.forge.java");
+            if (forgeJava != null && !forgeJava.isBlank()) {
+                command.add(forgeJava);
+            } else {
+                command.add(JavaRuntime.getDefault().getBinary().toString());
+            }
             command.add("-cp");
 
             List<String> classpath = new ArrayList<>(processor.getClasspath().size() + 1);
@@ -156,10 +163,31 @@ public class ForgeNewInstallTask extends Task<GameInstancePatch> {
 
             command.addAll(args);
 
-            LOG.info("Executing external processor " + processor.getJar().toString() + ", command line: " + new CommandBuilder().addAll(command).toString());
-            int exitCode = SystemUtils.callExternalProcess(command);
-            if (exitCode != 0)
-                throw new IOException("Game processor exited abnormally with code " + exitCode);
+            // Android：SELinux 禁止 exec app 数据目录下的 java 二进制（error=13 Permission denied），
+            // 改用进程内 JLI_Launch 拉起 JRE 运行处理器，规避 exec 限制。
+            if ("true".equals(System.getProperty("mio.android"))) {
+                LOG.info("Executing processor in-process (Android JLI_Launch): " + mainClass);
+                // command = [java, -cp, <cp>, mainClass, args...]；去掉 java 本身传 JLI_Launch
+                List<String> jliArgs = new ArrayList<>(command.subList(1, command.size()));
+                int code = runProcessorInProcess(jliArgs);
+                if (code != 0)
+                    throw new IOException("Game processor exited abnormally with code " + code);
+            } else {
+                LOG.info("Executing external processor " + processor.getJar().toString() + ", command line: " + new CommandBuilder().addAll(command).toString());
+                // Android 上运行内置 JRE 的 java 需要 LD_LIBRARY_PATH 指向 JRE 的 lib（否则 libjli.so 找不到）
+                ProcessBuilder pb = new ProcessBuilder(command);
+                String forgeJavaHome = System.getProperty("mio.forge.java.home");
+                if (forgeJavaHome != null && !forgeJavaHome.isBlank()) {
+                    String existing = pb.environment().get("LD_LIBRARY_PATH");
+                    String jreLib = new java.io.File(forgeJavaHome, "lib").getAbsolutePath();
+                    String jreLibServer = new java.io.File(forgeJavaHome, "lib/server").getAbsolutePath();
+                    pb.environment().put("LD_LIBRARY_PATH",
+                            jreLibServer + ":" + jreLib + (existing == null ? "" : ":" + existing));
+                }
+                int exitCode = SystemUtils.callExternalProcess(pb);
+                if (exitCode != 0)
+                    throw new IOException("Game processor exited abnormally with code " + exitCode);
+            }
 
             for (Map.Entry<String, String> entry : outputs.entrySet()) {
                 Path artifact = Paths.get(entry.getKey());
@@ -192,6 +220,41 @@ public class ForgeNewInstallTask extends Task<GameInstancePatch> {
                     throw new ChecksumMismatchException("SHA-1", entry.getValue(), code);
                 }
             }
+        }
+    }
+
+    /**
+     * 在 Android 上进程内运行 Forge/NeoForge 处理器。
+     *
+     * <p>SELinux 禁止 exec app 数据目录下的 java 二进制，这里通过反射调用
+     * 启动器 app 的 JRE.launchJava（进程内 JLI_Launch），用真实 JRE 运行处理器。</p>
+     *
+     * @param jliArgs java 命令行参数（不含 java 本身），如 {"-cp", "...", "mainClass", "args"}
+     * @return JLI_Launch 返回码（0 表示成功）
+     */
+    private static int runProcessorInProcess(List<String> jliArgs) throws Exception {
+        try {
+            Class<?> appClass = Class.forName("com.miolauncher.app.MioApplication");
+            java.lang.reflect.Method getContext = appClass.getMethod("getContext");
+            Object context = getContext.invoke(null);
+
+            Class<?> jreClass = Class.forName("com.miolauncher.backend.JRE");
+            java.lang.reflect.Method launchJava = null;
+            for (java.lang.reflect.Method m : jreClass.getMethods()) {
+                if ("launchJava".equals(m.getName()) && m.getParameterTypes().length == 2) {
+                    launchJava = m;
+                    break;
+                }
+            }
+            if (launchJava == null)
+                throw new NoSuchMethodException("JRE.launchJava not found");
+            Object code = launchJava.invoke(null, context, jliArgs);
+            return code instanceof Number ? ((Number) code).intValue() : -1;
+        } catch (ClassNotFoundException e) {
+            // 非 MioLauncher 环境（如 HMCL 桌面版）：回退到外部进程
+            LOG.warning("In-process processor launcher unavailable, falling back to external process", e);
+            ProcessBuilder pb = new ProcessBuilder(jliArgs);
+            return SystemUtils.callExternalProcess(pb);
         }
     }
 
@@ -296,31 +359,60 @@ public class ForgeNewInstallTask extends Task<GameInstancePatch> {
 
     @Override
     public void preExecute() throws Exception {
-        try (FileSystem fs = CompressingUtils.createReadOnlyZipFileSystem(installer)) {
-            profile = JsonUtils.fromNonNullJson(AndroidFiles.readString(fs.getPath("install_profile.json")), ForgeNewInstallProfile.class);
+        // Android app 进程没有 jdk.zipfs，用标准 ZipFile 读取 installer 内容
+        try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(installer.toFile())) {
+            profile = JsonUtils.fromNonNullJson(
+                    readEntryText(zf, "install_profile.json"),
+                    ForgeNewInstallProfile.class);
             processors = profile.getProcessors();
-            forgeVersion = JsonUtils.fromNonNullJson(AndroidFiles.readString(fs.getPath(profile.getJson())), GameInstanceManifest.class);
+            forgeVersion = JsonUtils.fromNonNullJson(
+                    readEntryText(zf, profile.getJson()),
+                    GameInstanceManifest.class);
 
             for (Library library : profile.getLibraries()) {
-                Path file = fs.getPath("maven").resolve(library.getPath());
-                if (Files.exists(file)) {
+                java.util.zip.ZipEntry entry = zf.getEntry("maven/" + library.getPath());
+                if (entry != null) {
                     Path dest = gameRepository.getLibraryFile(manifest, library);
-                    FileUtils.copyFile(file, dest);
+                    copyEntry(zf, entry, dest);
                 }
             }
 
             if (profile.getPath().isPresent()) {
-                Path mainJar = profile.getPath().get().getPath(fs.getPath("maven"));
-                if (Files.exists(mainJar)) {
+                java.util.zip.ZipEntry mainEntry = zf.getEntry("maven/" + profile.getPath().get().getPath());
+                if (mainEntry != null) {
                     Path dest = gameRepository.getArtifactFile(manifest, profile.getPath().get());
-                    FileUtils.copyFile(mainJar, dest);
+                    copyEntry(zf, mainEntry, dest);
                 }
             }
-        } catch (ZipException ex) {
+        } catch (java.util.zip.ZipException ex) {
             throw new ArtifactMalformedException("Malformed forge installer file", ex);
         }
 
         dependents.add(new GameLibrariesTask(dependencyManager, manifest, true, profile.getLibraries()));
+    }
+
+    private static String readEntryText(java.util.zip.ZipFile zf, String name) throws IOException {
+        // zip entry 名无前导斜杠；zipfs 的 Path 会规范化，ZipFile 需要手动去掉
+        String entryName = name != null && name.startsWith("/") ? name.substring(1) : name;
+        java.util.zip.ZipEntry entry = zf.getEntry(entryName);
+        if (entry == null) throw new IOException("Entry not found in Forge installer: " + name);
+        try (java.io.InputStream is = zf.getInputStream(entry)) {
+            return new String(org.jackhuang.hmcl.util.io.IOUtils.readFully(is), java.nio.charset.StandardCharsets.UTF_8);
+        }
+    }
+
+    private static void copyEntry(java.util.zip.ZipFile zf, java.util.zip.ZipEntry entry, Path dest) throws IOException {
+        if (entry == null) throw new IOException("Entry not found in Forge installer");
+        Files.createDirectories(dest.getParent());
+        try (java.io.InputStream is = zf.getInputStream(entry)) {
+            Files.copy(is, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static java.util.zip.ZipEntry findEntry(java.util.zip.ZipFile zf, String name) {
+        if (name == null) return null;
+        String n = name.startsWith("/") ? name.substring(1) : name;
+        return zf.getEntry(n);
     }
 
     private Map<String, String> parseOptions(List<String> args, Map<String, String> vars) {
@@ -393,7 +485,7 @@ public class ForgeNewInstallTask extends Task<GameInstancePatch> {
 
         Map<String, String> vars = new HashMap<>();
 
-        try (FileSystem fs = CompressingUtils.createReadOnlyZipFileSystem(installer)) {
+        try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(installer.toFile())) {
             for (Map.Entry<String, String> entry : profile.getData().entrySet()) {
                 String key = entry.getKey();
                 String value = entry.getValue();
@@ -402,11 +494,11 @@ public class ForgeNewInstallTask extends Task<GameInstancePatch> {
                         Collections.emptyMap(),
                         str -> {
                             Path dest = Files.createTempFile(tempDir, null, null);
-                            FileUtils.copyFile(fs.getPath(str), dest);
+                            copyEntry(zf, findEntry(zf, str), dest);
                             return dest.toString();
                         }));
             }
-        } catch (ZipException ex) {
+        } catch (java.util.zip.ZipException ex) {
             throw new ArtifactMalformedException("Malformed forge installer file", ex);
         }
 

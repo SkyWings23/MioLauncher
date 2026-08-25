@@ -29,6 +29,10 @@ import org.lwjgl.glfw.CallbackBridge
  */
 class GameActivity : ComponentActivity() {
 
+    private companion object {
+        const val REQ_TERRACOTTA_VPN = 0x51
+    }
+
     @Volatile
     private var launched = false
     private lateinit var controlLayout: net.kdt.pojavlaunch.customcontrols.ControlLayout
@@ -178,6 +182,9 @@ class GameActivity : ComponentActivity() {
             override fun onOpenMultiplayer() {
                 multiplayerDialog()
             }
+            override fun onOpenTerracotta() {
+                terracottaDialog()
+            }
             override fun onViewLog() {
                 logPanelDialog()
             }
@@ -268,6 +275,18 @@ class GameActivity : ComponentActivity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_TERRACOTTA_VPN) {
+            if (resultCode == android.app.Activity.RESULT_OK) {
+                try {
+                    startService(android.content.Intent(this, com.miolauncher.app.data.terracotta.TerracottaVpnService::class.java))
+                } catch (_: Exception) {
+                }
+                android.widget.Toast.makeText(this, "VPN 已授权", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                android.widget.Toast.makeText(this, "未授权 VPN，陶瓦联机无法工作", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
         if (requestCode == net.kdt.pojavlaunch.customcontrols.ControlLayout.LAYOUT_IMPORT_REQUEST
             && resultCode == android.app.Activity.RESULT_OK && data?.data != null) {
             controlLayout.importLayoutFromUri(data.data!!)
@@ -369,7 +388,262 @@ class GameActivity : ComponentActivity() {
             .show()
     }
 
-    private fun quickInputDialog() {        val items = arrayOf("W", "A", "S", "D", "空格", "E", "Q", "T", "Shift", "Ctrl", "Esc", "F3")
+    /**
+     * 陶瓦联机对话框（悬浮菜单入口）：
+     * 初始化 Terracotta → VpnService 授权 → 创建房间 / 加入房间 + 操作指南 + 房间号复制。
+     * 与 FCL 的陶瓦联机互通（同为 Terracotta 协议，房间号 U/XXXX-... 通用）。
+     */
+    private fun terracottaDialog() {
+        val ctx = this
+        // 初始化 Terracotta（首次）
+        if (!com.miolauncher.app.data.terracotta.TerracottaManager.initialized.value) {
+            try {
+                com.miolauncher.app.data.terracotta.TerracottaManager.initialize(ctx) {
+                    if (com.miolauncher.app.data.terracotta.TerracottaVpnService.isPrepared(ctx)) {
+                        startService(android.content.Intent(ctx, com.miolauncher.app.data.terracotta.TerracottaVpnService::class.java))
+                    }
+                }
+            } catch (e: Exception) {
+                android.app.AlertDialog.Builder(ctx)
+                    .setTitle("陶瓦联机")
+                    .setMessage("初始化失败：${e.message}\n设备可能不支持（需 Android 8+）。")
+                    .setPositiveButton("知道了", null)
+                    .show()
+                return
+            }
+        }
+
+        // VpnService 授权（未授权先弹系统对话框）
+        val prepared = com.miolauncher.app.data.terracotta.TerracottaVpnService.isPrepared(ctx)
+        if (!prepared) {
+            val intent = com.miolauncher.app.data.terracotta.TerracottaVpnService.prepareIntent(ctx)
+            if (intent != null) {
+                startActivityForResult(intent, REQ_TERRACOTTA_VPN)
+                android.widget.Toast.makeText(ctx, "请先授权 VPN，陶瓦联机才能工作", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // 状态文本（轮询更新）
+        val stateText = android.widget.TextView(ctx).apply {
+            textSize = 14f
+            setTextColor(0xFF4CAF50.toInt())
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        // 房间号行（创建成功后显示 + 复制按钮）
+        val roomRow = android.widget.LinearLayout(ctx).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            visibility = android.view.View.GONE
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+        val roomText = android.widget.TextView(ctx).apply {
+            textSize = 16f
+            setTextColor(android.graphics.Color.WHITE)
+            typeface = android.graphics.Typeface.MONOSPACE
+            setPadding(0, dp(2), dp(8), dp(2))
+        }
+        val copyBtn = android.widget.TextView(ctx).apply {
+            text = "复制"
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = 13f
+            setPadding(dp(16), dp(6), dp(16), dp(6))
+            background = makeRoundDrawable(0xFF3A6EA5.toInt(), dp(8))
+            setOnClickListener {
+                val code = roomText.text.toString().trim()
+                if (code.isNotEmpty()) {
+                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                    if (cm != null) {
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("terracotta", code))
+                        android.widget.Toast.makeText(ctx, "房间号已复制", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+        roomRow.addView(roomText)
+        roomRow.addView(copyBtn)
+
+        // 反馈文本（扫描超时/连接异常提示）
+        val hintText = android.widget.TextView(ctx).apply {
+            textSize = 13f
+            setTextColor(0xFFFFC107.toInt())
+            setPadding(0, dp(4), 0, dp(4))
+        }
+
+        fun updateStateText() {
+            val s = com.miolauncher.app.data.terracotta.TerracottaManager.state.value
+            when (s) {
+                is com.miolauncher.app.data.terracotta.TerracottaState.HostOK -> {
+                    stateText.text = "✅ 房间创建成功！"
+                    stateText.setTextColor(0xFF4CAF50.toInt())
+                    roomRow.visibility = android.view.View.VISIBLE
+                    roomText.text = s.getCode()
+                    hintText.text = "把房间号发给朋友（FCL/启动器都可加入）"
+                    hintText.setTextColor(0xFFAAAAAA.toInt())
+                }
+                is com.miolauncher.app.data.terracotta.TerracottaState.HostScanning -> {
+                    stateText.text = "⏳ 正在创建房间…（需先对局域网开放）"
+                    stateText.setTextColor(0xFFFFC107.toInt())
+                    roomRow.visibility = android.view.View.GONE
+                    hintText.text = ""
+                }
+                is com.miolauncher.app.data.terracotta.TerracottaState.GuestOK -> {
+                    stateText.text = "✅ 已加入房间！"
+                    stateText.setTextColor(0xFF4CAF50.toInt())
+                    roomRow.visibility = android.view.View.GONE
+                    hintText.text = "在游戏内「多人游戏 → 直接连接」输入：${s.getUrl()}"
+                    hintText.setTextColor(0xFF4CAF50.toInt())
+                }
+                is com.miolauncher.app.data.terracotta.TerracottaState.GuestConnecting,
+                is com.miolauncher.app.data.terracotta.TerracottaState.GuestStarting -> {
+                    stateText.text = "⏳ 正在加入房间…"
+                    stateText.setTextColor(0xFFFFC107.toInt())
+                    roomRow.visibility = android.view.View.GONE
+                    hintText.text = ""
+                }
+                is com.miolauncher.app.data.terracotta.TerracottaState.Exception -> {
+                    stateText.text = "❌ 连接异常：${s.getType()}"
+                    stateText.setTextColor(0xFFF44336.toInt())
+                    roomRow.visibility = android.view.View.GONE
+                    hintText.text = "对方可能已关闭房间，或网络不稳定。"
+                }
+                is com.miolauncher.app.data.terracotta.TerracottaState.HostStarting -> {
+                    stateText.text = "⏳ 房间启动中…"
+                    stateText.setTextColor(0xFFFFC107.toInt())
+                    roomRow.visibility = android.view.View.GONE
+                    hintText.text = ""
+                }
+                else -> {
+                    stateText.text = "空闲，等待操作"
+                    stateText.setTextColor(0xFF4CAF50.toInt())
+                    roomRow.visibility = android.view.View.GONE
+                    hintText.text = ""
+                }
+            }
+            // 扫描超时提示
+            if (com.miolauncher.app.data.terracotta.TerracottaManager.scanTimeout.value) {
+                stateText.text = "❌ 创建房间失败：未找到服务器"
+                stateText.setTextColor(0xFFF44336.toInt())
+                hintText.text = "请先：进入世界 → Esc →「对局域网开放」→ 再点「创建房间」"
+                hintText.setTextColor(0xFFFFC107.toInt())
+            }
+        }
+        updateStateText()
+
+        // 加入房间输入框
+        val roomInput = android.widget.EditText(ctx).apply {
+            hint = "输入房间号（U/XXXX-...，FCL 的房间号通用）"
+            setSingleLine(true)
+        }
+
+        // 操作按钮
+        val createBtn = android.widget.TextView(ctx).apply {
+            text = "创建房间"
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = 15f
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(12))
+            background = makeRoundDrawable(0xFF3A6EA5.toInt(), dp(10))
+            setOnClickListener {
+                val player = runCatching {
+                    ctx.getSharedPreferences("mio_profile", android.content.Context.MODE_PRIVATE)
+                        .getString("username", null)
+                }.getOrNull()
+                com.miolauncher.app.data.terracotta.TerracottaManager.setScanning(player)
+                stateText.text = "⏳ 正在创建房间…（需先对局域网开放）"
+                stateText.setTextColor(0xFFFFC107.toInt())
+                hintText.text = "若一直没房间号：先按 Esc → 对局域网开放 → 再点创建房间"
+                hintText.setTextColor(0xFFFFC107.toInt())
+            }
+        }
+        val joinBtn = android.widget.TextView(ctx).apply {
+            text = "加入房间"
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = 15f
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(12))
+            background = makeRoundDrawable(0xFF2E7D32.toInt(), dp(10))
+            setOnClickListener {
+                val room = roomInput.text.toString().trim()
+                if (room.isEmpty()) {
+                    android.widget.Toast.makeText(ctx, "请输入房间号", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    val player = runCatching {
+                        ctx.getSharedPreferences("mio_profile", android.content.Context.MODE_PRIVATE)
+                            .getString("username", null)
+                    }.getOrNull()
+                    val ok = com.miolauncher.app.data.terracotta.TerracottaManager.setGuesting(room, player)
+                    if (!ok) android.widget.Toast.makeText(ctx, "房间号无效，请检查格式", android.widget.Toast.LENGTH_SHORT).show()
+                    else {
+                        stateText.text = "⏳ 正在加入房间…"
+                        stateText.setTextColor(0xFFFFC107.toInt())
+                    }
+                }
+            }
+        }
+        val btnRow = android.widget.LinearLayout(ctx).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            val lp0 = android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            val lp1 = android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            lp0.setMargins(0, 0, dp(8), 0)
+            lp1.setMargins(dp(8), 0, 0, 0)
+            addView(createBtn, lp0)
+            addView(joinBtn, lp1)
+        }
+
+        // 操作指南
+        val guide = android.widget.TextView(ctx).apply {
+            text = "📖 操作指南（与 FCL 互通）：\n" +
+                "· 创建房间：游戏内进世界 → Esc →「对局域网开放」→ 点「创建房间」→ 复制房间号发给朋友\n" +
+                "· 加入房间：输入朋友（FCL/本启动器）发的房间号 → 点「加入房间」\n" +
+                "· 加入成功后：游戏内「多人游戏 → 直接连接」输入显示的地址\n" +
+                "· FCL 用户同样可用陶瓦联机，双方房间号互通"
+            textSize = 13f
+            setTextColor(0xFFAAAAAA.toInt())
+            setPadding(0, dp(10), 0, dp(4))
+        }
+
+        // 内容布局（可滚动，避免超出屏幕）
+        val contentInner = android.widget.LinearLayout(ctx).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            addView(stateText)
+            addView(roomRow)
+            addView(hintText)
+            addView(roomInput)
+            addView(btnRow)
+            addView(guide)
+        }
+        val scroll = android.widget.ScrollView(ctx).apply {
+            addView(contentInner)
+            // 固定高度确保可滚动（AlertDialog 对 wrap_content 的 ScrollView 不给高度）
+            layoutParams = android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, dp(460))
+        }
+
+        android.app.AlertDialog.Builder(ctx)
+            .setTitle("陶瓦联机")
+            .setView(scroll)
+            .setNegativeButton("关闭", null)
+            .show()
+
+        // 轮询刷新状态（绑定 Activity 生命周期，对话框关闭后自动停止）
+        lifecycleScope.launch {
+            while (true) {
+                updateStateText()
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+    }
+
+    private fun makeRoundDrawable(color: Int, radius: Int): android.graphics.drawable.GradientDrawable {
+        val g = android.graphics.drawable.GradientDrawable()
+        g.setColor(color)
+        g.setCornerRadius(radius.toFloat())
+        return g
+    }
+
+    private fun quickInputDialog() {
+        val items = arrayOf("W", "A", "S", "D", "空格", "E", "Q", "T", "Shift", "Ctrl", "Esc", "F3")
         val codes = intArrayOf(87, 65, 83, 68, 32, 69, 81, 84, 340, 341, 256, 292)
         android.app.AlertDialog.Builder(this)
             .setTitle("快捷输入")
@@ -476,10 +750,43 @@ class GameActivity : ComponentActivity() {
                         com.miolauncher.app.data.DeviceInfo.extendedMemoryLimit(this@GameActivity)
                     else
                         com.miolauncher.app.data.DeviceInfo.safeGameMemoryMb(this@GameActivity)
-                    val memFinal = mem.coerceIn(512, memCap)
+                    var memFinal = mem.coerceIn(512, memCap)
+                    // 启动前内存预检：可用内存过低时即使设置了高堆，JVM 也创建失败
+                    // （"Error: Could not create the Java Virtual Machine" 闪退）。按可用内存动态降档。
+                    val availNow = com.miolauncher.app.data.DeviceInfo.availableMemoryMb()
+                    if (availNow > 0 && availNow < 2048) {
+                        val safeNow = when {
+                            availNow < 1024 -> 512
+                            else -> 768
+                        }
+                        if (memFinal > safeNow) {
+                            android.util.Log.w("GameActivity", "可用内存不足(${availNow}MB)，游戏堆 ${memFinal}MB 降档到 ${safeNow}MB 避免 JVM 创建失败")
+                            memFinal = safeNow
+                        }
+                    }
                     android.util.Log.d("GameActivity", "launch: maxMemory=${memFinal}MB renderer=${renderer.id} server=${serverAddress ?: "-"} isolated=${vCfg.isolated}")
                     val cmd = GameLaunch.buildCommand(this@GameActivity, effectiveGameDir, versionId, username,
                         CallbackBridge.windowWidth, CallbackBridge.windowHeight, memFinal, serverAddress)
+                    // 正版（微软）登录优先：若已登录微软账号，用真实 accessToken/uuid
+                    val ms = com.miolauncher.app.data.MsAccount.load(this@GameActivity)
+                    if (ms != null) {
+                        val cmd2 = GameLaunch.buildCommand(this@GameActivity, effectiveGameDir, versionId, ms.username,
+                            CallbackBridge.windowWidth, CallbackBridge.windowHeight, memFinal, serverAddress,
+                            ms.accessToken, ms.uuid, "msa", "{}")
+                        cmd.clear()
+                        cmd.addAll(cmd2)
+                    } else {
+                        // LittleSkin 外置登录：若已登录，用真实 accessToken/uuid 覆盖离线认证
+                        // 用 loadValid：自动 validate/refresh 令牌生命周期，失效则重新要求登录
+                        val ls = com.miolauncher.app.data.LittleSkinAccount.loadValid(this@GameActivity)
+                        if (ls != null) {
+                            val cmd2 = GameLaunch.buildCommand(this@GameActivity, effectiveGameDir, versionId, ls.username,
+                                CallbackBridge.windowWidth, CallbackBridge.windowHeight, memFinal, serverAddress,
+                                ls.accessToken, ls.uuid, "mojang", ls.userProperties)
+                            cmd.clear()
+                            cmd.addAll(cmd2)
+                        }
+                    }
                     android.util.Log.d("GameActivity", "launch: start JVM")
                     val cfg = com.miolauncher.backend.LaunchConfig()
                     cfg.resolutionScale = settings.resolutionScale
@@ -507,6 +814,8 @@ class GameActivity : ComponentActivity() {
                     val crashBaseline = com.miolauncher.app.data.CrashLogManager.newestCrashTime(this@GameActivity)
                     // 写启动标记：任何异常退出（native 崩溃/被系统杀）都会残留，下次启动可检测
                     com.miolauncher.app.data.CrashLogManager.markGameStart(this@GameActivity, versionId)
+                    // 应用热更新补丁（覆盖 extractRuntime 解压出的 runtime jar，无需重装 APK）
+                    com.miolauncher.app.data.PatchManager.applyAllToRuntime(this@GameActivity)
                     val startMs = System.currentTimeMillis()
                     val code = GameLaunch.launch(this@GameActivity, effectiveGameDir, cmd,
                         CallbackBridge.windowWidth, CallbackBridge.windowHeight, renderer, cfg)
@@ -617,6 +926,18 @@ class GameActivity : ComponentActivity() {
         report: com.miolauncher.app.data.CrashLogManager.CrashReport,
         diagnoses: List<com.miolauncher.backend.GameLogAnalyzer.Diagnosis> = emptyList(),
     ) {
+        // 崩溃自动上传到云端（后台线程，不阻塞弹窗；去重避免重复传）
+        Thread {
+            try {
+                com.miolauncher.app.data.LogUploader.autoUpload(
+                    report.combined,
+                    com.miolauncher.app.data.LogUploader.deviceInfo(this),
+                    report.title,
+                    this,
+                )
+            } catch (_: Exception) {}
+        }.start()
+
         val dialog = android.app.Dialog(this)
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         val dp = resources.displayMetrics.density
@@ -635,6 +956,8 @@ class GameActivity : ComponentActivity() {
         val root = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             setPadding(dpf(20f), dpf(16f), dpf(20f), dpf(12f))
+            // 深色背景，保证白字可读
+            setBackgroundColor(0xFF202124.toInt())
         }
         root.addView(android.widget.TextView(this).apply {
             text = "游戏崩溃了"
@@ -646,6 +969,7 @@ class GameActivity : ComponentActivity() {
             text = report.title
             setTextSize(13f)
             setPadding(0, dpf(2f), 0, dpf(8f))
+            setTextColor(0xFFFFFFFF.toInt())
         })
 
         // 日志自动诊断结果
@@ -655,6 +979,7 @@ class GameActivity : ComponentActivity() {
                 setTextSize(14f)
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
                 setPadding(0, dpf(4f), 0, dpf(4f))
+                setTextColor(0xFFFFFFFF.toInt())
             })
             val diagScroll = android.widget.ScrollView(this).apply {
                 addView(android.widget.TextView(this@GameActivity).apply {
@@ -718,12 +1043,45 @@ class GameActivity : ComponentActivity() {
             if (f != null) android.widget.Toast.makeText(this@GameActivity, "已导出到：${f.absolutePath}", android.widget.Toast.LENGTH_LONG).show()
             else android.widget.Toast.makeText(this@GameActivity, "导出失败", android.widget.Toast.LENGTH_SHORT).show()
         }
+        addButton(row2, "上传日志") {
+            // 上传崩溃日志到云端，复制查看链接（方便发群里让开发者在线读）
+            val ctx = this@GameActivity
+            var uploadBtn: android.widget.TextView? = null
+            runCatching {
+                val v = dialog.findViewById<android.widget.TextView>(android.R.id.button3)
+                if (v != null) uploadBtn = v
+            }
+            val btn = uploadBtn
+            btn?.text = "上传中…"
+            val combined = report.combined
+            val device = com.miolauncher.app.data.LogUploader.deviceInfo(ctx)
+            Thread {
+                val url = com.miolauncher.app.data.LogUploader.upload(combined, device, report.title, ctx)
+                runOnUiThread {
+                    btn?.text = "上传日志"
+                    if (url == null) {
+                        android.widget.Toast.makeText(ctx, "上传失败，请检查网络", android.widget.Toast.LENGTH_LONG).show()
+                    } else {
+                        val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                        cm?.setPrimaryClip(android.content.ClipData.newPlainText("log_url", url))
+                        android.widget.Toast.makeText(ctx, "已上传并复制链接：$url", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            }.start()
+        }
         addButton(row2, "关闭") {
             dialog.dismiss()
         }
         root.addView(row2)
 
         dialog.setContentView(root)
+        // 让对话框占屏幕大部分宽度，保证内容可读
+        dialog.window?.let { w ->
+            w.setLayout(
+                (resources.displayMetrics.widthPixels * 0.9f).toInt(),
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+            )
+        }
         dialog.setOnDismissListener {
             // 本次崩溃已呈现，标记已读，避免下次启动重复提示
             com.miolauncher.app.data.CrashLogManager.consume(this@GameActivity)

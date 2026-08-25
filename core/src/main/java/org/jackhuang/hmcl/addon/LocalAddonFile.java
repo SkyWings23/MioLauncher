@@ -95,7 +95,16 @@ public abstract class LocalAddonFile {
         }
 
         public String toStringSingleLine() {
-            return toString().lines().map(String::trim).filter(StringUtils::isNotBlank).collect(Collectors.joining(" | "));
+            // Android 的 String 没有 lines()（Java 11+），用 split 兼容
+            String[] lines = toString().split("\\r?\\n", -1);
+            StringBuilder sb = new StringBuilder();
+            for (String line : lines) {
+                String t = line.trim();
+                if (t.isEmpty()) continue;
+                if (sb.length() > 0) sb.append(" | ");
+                sb.append(t);
+            }
+            return sb.toString();
         }
 
         public static class Part {

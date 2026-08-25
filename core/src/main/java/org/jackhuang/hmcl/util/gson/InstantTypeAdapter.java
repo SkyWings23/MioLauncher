@@ -82,10 +82,12 @@ public final class InstantTypeAdapter implements JsonSerializer<Instant>, JsonDe
             .withZone(ZoneId.systemDefault());
 
     /// Formatter for ISO local date-time text followed by one of the supported offset forms.
+    /// 注意：Android 的 java.time 对 offset pattern 校验严格，`+H:MM` 这种单 H 的 pattern
+    /// 会抛 IllegalArgumentException（桌面 Java 宽松能过），导致 JsonUtils 初始化崩溃，
+    /// 进而版本列表/清单解析全部失败。因此这里只用标准 `+HH:MM` 等合法 pattern。
     private static final DateTimeFormatter ISO_DATE_TIME = new DateTimeFormatterBuilder()
             .append(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
             .optionalStart().appendOffset("+HH:MM", "+00:00").optionalEnd()
-            .optionalStart().appendOffset("+H:MM", "+0:00").optionalEnd()
             .optionalStart().appendOffset("+HHMM", "+0000").optionalEnd()
             .optionalStart().appendOffset("+HH", "Z").optionalEnd()
             .optionalStart().appendOffsetId().optionalEnd()

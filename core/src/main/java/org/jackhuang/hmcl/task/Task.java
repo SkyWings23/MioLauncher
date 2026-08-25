@@ -29,8 +29,6 @@ import org.jackhuang.hmcl.util.function.ExceptionalRunnable;
 import org.jackhuang.hmcl.util.function.ExceptionalSupplier;
 import org.jetbrains.annotations.Nullable;
 
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
@@ -363,32 +361,21 @@ public abstract class Task<T> {
     //region Helpers for updateProgressImmediately
 
     @SuppressWarnings("FieldMayBeFinal")
-    private volatile double pendingProgress = -1.0;
-
-    /// @see Task#pendingProgress
-    private static final VarHandle PENDING_PROGRESS_HANDLE;
-
-    static {
-        try {
-            PENDING_PROGRESS_HANDLE = MethodHandles.lookup()
-                    .findVarHandle(Task.class, "pendingProgress", double.class);
-        } catch (NoSuchFieldException | IllegalAccessException e) {
-            throw new ExceptionInInitializerError(e);
-        }
-    }
+    private final java.util.concurrent.atomic.AtomicReference<Double> pendingProgress =
+            new java.util.concurrent.atomic.AtomicReference<>(-1.0);
     //endregion updateProgressImmediately
 
     protected void updateProgressImmediately(double progress) {
         // assert progress >= 0 && progress <= 1.0;
-        if ((double) PENDING_PROGRESS_HANDLE.getAndSet(this, progress) == -1.0) {
-            // 不能用 lambda（D8 对 "捕获 this + VarHandle" 的组合生成无效字节码，导致
-            // VerifyError: register v4 has type Task but expected Object[]）。
-            // 改用匿名类绕过 D8 的 invokedynamic 去糖。
+        // 不用 VarHandle.getAndSet：D8 对签名多态方法去糖后字节码类型错误
+        // （VerifyError: register v4 has type Task but expected Object）。
+        // AtomicReference 是普通方法调用，D8 可正确编译。
+        if (pendingProgress.getAndSet(progress) == -1.0) {
             final Task<?> self = this;
             Platform.runLater(new Runnable() {
                 @Override
                 public void run() {
-                    self.progress.set((double) PENDING_PROGRESS_HANDLE.getAndSet(self, -1.0));
+                    self.progress.set(pendingProgress.getAndSet(-1.0));
                 }
             });
         }

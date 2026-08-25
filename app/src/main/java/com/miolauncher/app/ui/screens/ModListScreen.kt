@@ -21,8 +21,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
@@ -213,6 +215,53 @@ fun ModListScreen(selectedVersionId: String? = null) {
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                // 游戏内模组加载状态（从最新一次启动日志解析）
+                item {
+                    val loadResult = remember(context) {
+                        with(com.miolauncher.app.data.GameModLoader) {
+                            com.miolauncher.app.data.GameModLoader.loadResult(context)
+                        }
+                    }
+                    if (loadResult.logExists) {
+                        androidx.compose.material3.Card(
+                            colors = androidx.compose.material3.CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            ),
+                        ) {
+                            Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        if (loadResult.failedCount > 0) Icons.Filled.Warning
+                                        else Icons.Filled.CheckCircle,
+                                        contentDescription = null,
+                                        tint = if (loadResult.failedCount > 0) MaterialTheme.colorScheme.error else MioGreen,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "上次启动加载",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                    Spacer(Modifier.weight(1f))
+                                    Text(
+                                        text = loadResult.message,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                if (loadResult.failedCount > 0) {
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        text = "失败模组：${loadResult.failedMods.joinToString("、")}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 items(shown, key = { it.fileName }) { entry ->
                     ModRow(
                         entry = entry,
@@ -258,9 +307,13 @@ fun ModListScreen(selectedVersionId: String? = null) {
                 TextButton(onClick = {
                     deleteTarget = null
                     scope.launch {
-                        withContext(Dispatchers.IO) {
-                            ModManager.delete(context, currentVersion?.id, entry.fileName)
+                        val ok = withContext(Dispatchers.IO) {
+                            val r = ModManager.delete(context, currentVersion?.id, entry.fileName)
                             ModManager.clearCache()
+                            r
+                        }
+                        if (!ok) {
+                            android.widget.Toast.makeText(context, "删除失败：文件不存在或无权限", android.widget.Toast.LENGTH_SHORT).show()
                         }
                         reload()
                     }

@@ -103,15 +103,32 @@ fun ResourceDetailScreen(
             project = proj
             if (proj == null) projectError = "无法获取项目信息，请检查网络"
             versionsLoading = true
-            versions = withContext(Dispatchers.IO) {
+            val loadedVersions = withContext(Dispatchers.IO) {
                 runCatching { ModrinthApi.versions(detail.slug, detail.gameVersion, detail.loaders) }
                     .getOrElse {
                         projectError = "版本信息解析失败，请稍后重试"
                         emptyList()
                     }
             }
+            // 整合包：过滤出启动器支持（MC ≤ 1.21）的版本，并限制数量避免几百项一次性渲染卡死
+            versions = if (detail.type == com.miolauncher.app.data.ResourceInstaller.Type.MODPACK) {
+                val supported = loadedVersions.filter { v ->
+                    v.gameVersions.any { gv -> !com.miolauncher.app.data.MioRepository.isMcAboveSupport(gv) }
+                }
+                if (supported.isNotEmpty()) supported.take(30) else loadedVersions.take(30)
+            } else {
+                loadedVersions
+            }
             versionsLoading = false
-            if (selectedIndex >= versions.size) selectedIndex = 0
+            // 整合包：默认选第一个受支持版本
+            if (detail.type == com.miolauncher.app.data.ResourceInstaller.Type.MODPACK && versions.isNotEmpty()) {
+                val supportedIdx = versions.indexOfFirst { v ->
+                    v.gameVersions.any { gv -> !com.miolauncher.app.data.MioRepository.isMcAboveSupport(gv) }
+                }
+                selectedIndex = if (supportedIdx >= 0) supportedIdx else 0
+            } else if (selectedIndex >= versions.size) {
+                selectedIndex = 0
+            }
         } catch (e: Exception) {
             projectError = "获取详情失败：${e.message}"
             versionsLoading = false
@@ -127,18 +144,38 @@ fun ResourceDetailScreen(
         status = ""
         scope.launch {
             try {
-                val result = withContext(Dispatchers.IO) {
-                    ResourceInstaller.install(
-                        context, detail.type, detail.slug, selectedVersion,
-                        detail.gameVersion, detail.loaders,
-                        taskId = taskId,
-                        includeDeps = includeDeps,
-                        versionId = versionId,
-                        onStatus = { s -> status = s },
-                    )
+                if (detail.type == com.miolauncher.app.data.ResourceInstaller.Type.MODPACK) {
+                    // 整合包：下载 mrpack → 解析 → 创建实例 → 装依赖模组 → 完成
+                    val v = selectedVersion ?: throw Exception("未选择整合包版本")
+                    val file = v.files.firstOrNull() ?: throw Exception("该版本无可用文件")
+                    message = ""
+                    withContext(Dispatchers.IO) {
+                        val repo = com.miolauncher.app.data.MioRepository(context)
+                        val instanceName = detail.slug.replace(Regex("[^a-zA-Z0-9_-]"), "-") + "-" + (v.versionNumber ?: "pack")
+                        repo.installModpack(
+                            modpackUrl = file.url,
+                            instanceName = instanceName,
+                            onStage = { s, p -> status = s },
+                            onItem = { _, _, _ -> },
+                            onTaskCount = {},
+                            onTaskDone = {},
+                        )
+                    }
+                    message = "整合包安装完成，可在主页选择 $detail.title 启动"
+                } else {
+                    val result = withContext(Dispatchers.IO) {
+                        ResourceInstaller.install(
+                            context, detail.type, detail.slug, selectedVersion,
+                            detail.gameVersion, detail.loaders,
+                            taskId = taskId,
+                            includeDeps = includeDeps,
+                            versionId = versionId,
+                            onStatus = { s -> status = s },
+                        )
+                    }
+                    depCount = result.dependencyNames.size
+                    message = if (depCount > 0) "已自动补齐 $depCount 个前置" else ""
                 }
-                depCount = result.dependencyNames.size
-                message = if (depCount > 0) "已自动补齐 $depCount 个前置" else ""
             } catch (e: Exception) {
                 message = e.message ?: "安装失败"
             } finally {

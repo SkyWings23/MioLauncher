@@ -124,7 +124,7 @@ data class LaunchSettings(
     var perfProfile: PerfProfile = PerfProfile.LOW,
     var resolutionScale: Int = 80,       // 渲染分辨率缩放（默认 LOW 档，保证流畅）
     var renderDistance: Int = 4,         // 可见距离 2..32
-    var simulationDistance: Int = 4,     // 模拟距离 2..16（默认 ≤ 渲染距离）
+    var simulationDistance: Int = 5,     // 模拟距离 5..32（MC 1.18+ 最小值为 5，4 会被游戏拒绝报错）
     var maxFps: Int = 60,                // 帧率上限 30..240, 240 = 无上限
     var fov: Int = 70,                   // 视角 30..110
     var guiScale: Int = 0,               // 界面缩放 0=自动, 1..4
@@ -140,7 +140,7 @@ data class LaunchSettings(
             PerfProfile.LOW -> LaunchSettings().also {
                 it.perfProfile = PerfProfile.LOW
                 it.renderDistance = 4
-                it.simulationDistance = 4
+                it.simulationDistance = 5
                 it.maxFps = 60
                 it.particles = 1
                 it.resolutionScale = 80

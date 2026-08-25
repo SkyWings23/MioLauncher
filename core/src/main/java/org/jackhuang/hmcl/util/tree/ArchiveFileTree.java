@@ -170,7 +170,7 @@ public abstract class ArchiveFileTree<R, E extends ArchiveEntry> implements Clos
 
     public byte[] readBinaryEntry(@NotNull E entry) throws IOException {
         try (InputStream input = getInputStream(entry)) {
-            return input.readAllBytes();
+            return org.jackhuang.hmcl.util.io.IOUtils.readFully(input);
         }
     }
 

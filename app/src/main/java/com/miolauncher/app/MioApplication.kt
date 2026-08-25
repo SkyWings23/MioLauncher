@@ -11,6 +11,15 @@ class MioApplication : Application() {
         super.onCreate()
         appContext = this
 
+        // 启动时主动回收内存（上次可能因下载/游戏崩溃残留大量对象），
+        // 降低"下载版本闪退后无法进入启动器"的内存压力。
+        try {
+            val rt = Runtime.getRuntime()
+            rt.gc()
+            Thread.sleep(100)
+            rt.gc()
+        } catch (_: Exception) {}
+
         // 全局崩溃捕获：任何未捕获异常（主线程/其他线程）都写入日志文件，
         // 即使启动器 app 闪退，下次启动也能看到崩溃原因。
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
@@ -44,5 +53,10 @@ class MioApplication : Application() {
         @Volatile
         var appContext: MioApplication? = null
             private set
+
+        @JvmStatic
+        fun getContext(): MioApplication {
+            return appContext ?: error("MioApplication not initialized")
+        }
     }
 }

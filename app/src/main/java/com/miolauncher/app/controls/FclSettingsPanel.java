@@ -32,6 +32,7 @@ public class FclSettingsPanel extends FrameLayout {
         void onOpenKeyBinding();
         void onOpenCascadeMenu();
         void onOpenMultiplayer();
+        void onOpenTerracotta();
         void onViewLog();
         void onResolutionChanged();
         void onToggleControls();
@@ -190,6 +191,7 @@ public class FclSettingsPanel extends FrameLayout {
         addSwitch("隐藏菜单键", prefs.hideMenuKey, v -> { prefs.hideMenuKey = v; updateBallVisibility(); });
         addSwitch("显示FPS", prefs.showFps, v -> { prefs.showFps = v; prefs.sp.edit().putBoolean("showFps", v).apply(); });
         addButton("联机菜单", "打开", () -> { close(); if (listener != null) listener.onOpenMultiplayer(); });
+        addButton("陶瓦联机", "打开", () -> { close(); if (listener != null) listener.onOpenTerracotta(); });
         addButton("快捷输入", "管理", () -> { close(); if (listener != null) listener.onOpenQuickInput(); });
         addButton("发送键值", "发送", () -> { close(); if (listener != null) listener.onSendCustomKey(); });
         addSwitch("禁用软键盘自适应", prefs.disableSoftKeyboard, v -> prefs.disableSoftKeyboard = v);

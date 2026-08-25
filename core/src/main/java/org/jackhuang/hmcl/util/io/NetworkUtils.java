@@ -476,12 +476,22 @@ public final class NetworkUtils {
     }
 
     // ==== Shortcut methods for encoding/decoding URLs in UTF-8 ====
+    // Android 的 URLEncoder/URLDecoder 只有 encode(String, String)（Java 10+ 才加 Charset 重载），
+    // 用 charset name 避免 NoSuchMethodError。
     public static String encodeURL(String toEncode) {
-        return URLEncoder.encode(toEncode, UTF_8);
+        try {
+            return URLEncoder.encode(toEncode, UTF_8.name());
+        } catch (java.io.UnsupportedEncodingException e) {
+            throw new IllegalStateException("UTF-8 should always be supported", e);
+        }
     }
 
     public static String decodeURL(String toDecode) {
-        return URLDecoder.decode(toDecode, UTF_8);
+        try {
+            return URLDecoder.decode(toDecode, UTF_8.name());
+        } catch (java.io.UnsupportedEncodingException e) {
+            throw new IllegalStateException("UTF-8 should always be supported", e);
+        }
     }
 
     /// @throws IllegalArgumentException if the string is not a valid URI

@@ -172,6 +172,8 @@ public final class BMCLAPIDownloadProvider implements DownloadProvider {
 
     @Override
     public int getConcurrency() {
-        return Math.max(Runtime.getRuntime().availableProcessors() * 2, 6);
+        // 移动端：限制并发避免多文件同时下载导致内存暴涨（10 核设备会算出 20 并发，
+        // 下载大版本时内存峰值过高，可能被系统 LMK 杀导致"下载到 70% 闪退"）。
+        return Math.min(Math.max(Runtime.getRuntime().availableProcessors(), 2), 4);
     }
 }

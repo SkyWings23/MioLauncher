@@ -162,7 +162,7 @@ public class LibraryDownloadTask extends Task<Void> {
         JarInputStream jar = new JarInputStream(new ByteArrayInputStream(data));
         JarEntry entry = jar.getNextJarEntry();
         while (entry != null) {
-            byte[] eData = jar.readAllBytes();
+            byte[] eData = org.jackhuang.hmcl.util.io.IOUtils.readFully(jar);
             if (entry.getName().equals("checksums.sha1")) {
                 hashes = new String(eData, StandardCharsets.UTF_8).split("\n");
             }

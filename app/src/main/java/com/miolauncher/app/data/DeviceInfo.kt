@@ -22,11 +22,38 @@ object DeviceInfo {
         }
     }
 
+    /** 当前可用内存（MB）：/proc/meminfo MemAvailable，更准确反映实际内存压力 */
+    fun availableMemoryMb(): Int {
+        return try {
+            val lines = java.io.File("/proc/meminfo").readLines()
+            val line = lines.firstOrNull { it.startsWith("MemAvailable") }
+                ?: lines.firstOrNull { it.startsWith("MemFree") }
+                ?: return 0
+            val kb = Regex("(\\d+)").find(line)?.groupValues?.get(1)?.toLongOrNull() ?: 0
+            (kb / 1024).toInt()
+        } catch (_: Exception) {
+            0
+        }
+    }
+
     /**
      * 游戏 JVM 安全内存上限（MB）。
-     * 预留系统 / 其他进程空间，低配机型自动降档，防止被 LMK 杀死。
+     * 优先按可用内存（MemAvailable）判断：可用内存低时即使总内存大也降档，
+     * 防止游戏运行中内存不足被 LMK 杀死（"玩着玩着闪退"）。
      */
     fun safeGameMemoryMb(context: Context): Int {
+        // 可用内存优先（能反映后台占用）
+        val avail = availableMemoryMb()
+        if (avail > 0) {
+            return when {
+                avail < 1024 -> 512
+                avail < 2048 -> 768
+                avail < 3072 -> 1024
+                avail < 6144 -> 1536
+                else -> 2048
+            }
+        }
+        // 读不到可用内存则退回按总内存
         val total = totalMemoryMb(context)
         return when {
             total < 2048 -> 512

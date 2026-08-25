@@ -53,7 +53,11 @@ public final class GameVersionList extends VersionList<GameRemoteVersion> {
 
     @Override
     public Task<?> refreshAsync() {
-        return new GetTask(downloadProvider.getVersionListURLs()).thenGetJsonAsync(GameRemoteVersions.class)
+        // 版本清单多源（官方 + 镜像）依次尝试，但每源只试 1 次（retry=1），
+        // 避免单个不可达源重试 3×8s 拖慢整体，导致版本列表"一直加载中"。
+        GetTask task = new GetTask(downloadProvider.getVersionListURLs());
+        task.setRetry(1);
+        return task.thenGetJsonAsync(GameRemoteVersions.class)
                 .thenAcceptAsync(root -> {
                     GameRemoteVersions unlistedVersions = null;
 

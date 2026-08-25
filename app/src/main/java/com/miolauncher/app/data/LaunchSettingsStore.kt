@@ -25,9 +25,20 @@ object LaunchSettingsStore {
     private const val KEY_JVM_ARGS = "launch_jvm_args"
     private const val KEY_EXT_MEMORY = "launch_ext_memory"
 
+    /** 按 GPU/CPU 厂商推荐默认渲染器：
+     * Mali（联发科/部分麒麟）与 Adreno（高通）用 MobileGlues 兼容性最佳（官方注释），
+     * 避免默认 NGGL4ES 在部分 GPU 上黑屏/渲染异常。 */
+    fun recommendedRenderer(): Renderer {
+        val hw = (android.os.Build.HARDWARE + " " + android.os.Build.BOARD + " " +
+            (if (android.os.Build.VERSION.SDK_INT >= 31) android.os.Build.SOC_MODEL else "")).lowercase()
+        val mtk = hw.contains("mt") || hw.contains("mediatek") || hw.contains("mali") || hw.contains("kirin")
+        val qcom = hw.contains("qcom") || hw.contains("sm8") || hw.contains("sm7") || hw.contains("adreno")
+        return if (mtk || qcom) Renderer.MOBILEGLUES else Renderer.NGGL4ES
+    }
+
     fun load(context: Context): LaunchSettings {
         val sp = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-        val renderer = Renderer.fromId(sp.getString(KEY_RENDERER, Renderer.NGGL4ES.id))
+        val renderer = Renderer.fromId(sp.getString(KEY_RENDERER, recommendedRenderer().id))
         val profile = runCatching {
             PerfProfile.valueOf(sp.getString(KEY_PROFILE, PerfProfile.LOW.name) ?: PerfProfile.LOW.name)
         }.getOrDefault(PerfProfile.LOW)
@@ -39,7 +50,7 @@ object LaunchSettingsStore {
             perfProfile = profile,
             resolutionScale = sp.getInt(KEY_RES_SCALE, 80),
             renderDistance = sp.getInt(KEY_RENDER_DIST, 4),
-            simulationDistance = sp.getInt(KEY_SIM_DIST, 4),
+            simulationDistance = sp.getInt(KEY_SIM_DIST, 5).coerceIn(5, 32),
             maxFps = sp.getInt(KEY_MAX_FPS, 60),
             fov = sp.getInt(KEY_FOV, 70),
             guiScale = sp.getInt(KEY_GUI_SCALE, 0),

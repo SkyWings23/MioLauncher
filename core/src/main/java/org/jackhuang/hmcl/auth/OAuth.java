@@ -36,11 +36,13 @@ import static org.jackhuang.hmcl.util.Pair.pair;
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 public class OAuth {
+    // 用老 live.com 端点（FCL/Pojav 同款）：Mojang 官方 Azure 应用 00000000402b5328
+    // 只在这组老端点上可用（v2.0 consumers 端点该 ID 已失效，报 AADSTS700016）。
     public static final OAuth MICROSOFT = new OAuth(
             "https://login.live.com/oauth20_authorize.srf",
             "https://login.live.com/oauth20_token.srf",
-            "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode",
-            "https://login.microsoftonline.com/consumers/oauth2/v2.0/token");
+            "https://login.live.com/oauth20_connect.srf",
+            "https://login.live.com/oauth20_token.srf");
 
     private final String authorizationURL;
     private final String accessTokenURL;
@@ -114,8 +116,11 @@ public class OAuth {
     }
 
     private Result authenticateDevice(Options options) throws IOException, InterruptedException, JsonParseException, AuthenticationException {
+        // 老 live.com 端点（FCL/Pojav 同款）要求 response_type=device_code
         DeviceTokenResponse deviceTokenResponse = HttpRequest.POST(deviceCodeURL)
-                .form(pair("client_id", options.callback.getClientId()), pair("scope", options.scope))
+                .form(pair("client_id", options.callback.getClientId()),
+                        pair("scope", options.scope),
+                        pair("response_type", "device_code"))
                 .ignoreHttpCode()
                 .retry(5)
                 .getJson(DeviceTokenResponse.class);
@@ -141,7 +146,7 @@ public class OAuth {
             TokenResponse tokenResponse = HttpRequest.POST(tokenURL)
                     .form(
                             pair("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-                            pair("code", deviceTokenResponse.deviceCode),
+                            pair("device_code", deviceTokenResponse.deviceCode),
                             pair("client_id", options.callback.getClientId()))
                     .ignoreHttpCode()
                     .retry(5)
@@ -158,6 +163,10 @@ public class OAuth {
             if ("slow_down".equals(tokenResponse.error)) {
                 interval += 5000;
                 continue;
+            }
+
+            if (tokenResponse.error != null) {
+                throw new RemoteAuthenticationException(tokenResponse.error, tokenResponse.errorDescription, "");
             }
 
             options.callback.loginCompletedDeviceCode();

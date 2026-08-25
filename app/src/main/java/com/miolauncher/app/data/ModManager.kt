@@ -124,8 +124,18 @@ object ModManager {
         }
     }
 
-    fun delete(context: Context, versionId: String?, fileName: String) {
-        resolveFile(context, versionId, fileName).delete()
+    /** 删除模组文件。返回是否删除成功。 */
+    fun delete(context: Context, versionId: String?, fileName: String): Boolean {
+        var ok = false
+        val base = fileName.removeSuffix(DISABLED_SUFFIX)
+        for (name in listOf(fileName, base, base + DISABLED_SUFFIX).distinct()) {
+            val f = resolveFile(context, versionId, name)
+            try {
+                if (f.exists() && f.delete()) ok = true
+            } catch (_: Exception) {
+            }
+        }
+        return ok
     }
 
     /** 往指定来源的 mods 目录写入文件（自定义导入用）。返回目标文件。 */

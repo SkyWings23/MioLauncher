@@ -215,14 +215,28 @@ object GameLogAnalyzer {
             ),
             severity = Severity.ERROR,
             title = "JVM 启动失败",
-            detail = "Java 虚拟机无法启动，可能是启动参数不被内置 JRE 支持或内存不足。",
+            detail = "Java 虚拟机无法启动，可能是启动参数不被内置 JRE 支持、内存不足，或 Java 运行环境损坏。",
             fix = Fix(
-                description = "检查启动参数",
+                description = "自动重装 Java 运行环境",
                 action = object : FixAction {
-                    override fun execute(context: android.content.Context, gameDir: File): Boolean = false
+                    override fun execute(context: android.content.Context, gameDir: File): Boolean {
+                        return try {
+                            val err = com.miolauncher.backend.JRE.repairJre(context)
+                            if (err == null) {
+                                android.util.Log.i("MioFix", "JRE 已重装");
+                                true
+                            } else {
+                                android.util.Log.w("MioFix", "JRE 重装失败: " + err);
+                                false
+                            }
+                        } catch (e: Throwable) {
+                            android.util.Log.w("MioFix", "JRE 重装异常", e);
+                            false
+                        }
+                    }
                     override fun describe(): String =
-                        "请尝试：1) 在启动设置中降低内存占用；2) 更换一个较旧、兼容的 Minecraft 版本；" +
-                        "3) 若日志提示 Unrecognized option，请更新启动器或更换版本。"
+                        "已自动重装 Java 运行环境。若仍无法启动：1) 在启动设置中降低内存占用；" +
+                        "2) 更换较旧的兼容版本（如 1.21.x）；3) 检查设备存储空间是否充足。"
                 }
             ),
         ),
@@ -369,6 +383,25 @@ object GameLogAnalyzer {
                     override fun execute(context: android.content.Context, gameDir: File): Boolean = false
                     override fun describe(): String =
                         "请在「启动设置」中切换渲染器（如改为 GL4ES 兼容档），或降低渲染分辨率后重试。"
+                }
+            ),
+        ),
+        // MobileGlues 渲染器在部分设备（骁龙/特定 GPU）崩溃：Surface/EGL 缓冲队列问题
+        LogPattern(
+            id = "mobileglues_crash",
+            regex = Pattern.compile(
+                "MobileGlues.*(?:SIGSEGV|BLASTBufferQueue|libgui\\.so|acquireNextBufferLocked|EGL.*error)",
+                Pattern.DOTALL
+            ),
+            severity = Severity.WARNING,
+            title = "MobileGlues 渲染器崩溃",
+            detail = "MobileGlues 渲染后端在您的设备上不稳定（Surface/EGL 缓冲队列崩溃），建议切换为默认渲染器。",
+            fix = Fix(
+                description = "切换回默认渲染器",
+                action = object : FixAction {
+                    override fun execute(context: android.content.Context, gameDir: File): Boolean = false
+                    override fun describe(): String =
+                        "在「我的 → 启动设置」中把渲染器改为「NG GL4ES（默认）」，即可解决多数此类崩溃。"
                 }
             ),
         ),

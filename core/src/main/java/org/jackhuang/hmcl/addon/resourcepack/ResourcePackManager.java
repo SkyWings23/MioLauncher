@@ -250,14 +250,16 @@ public final class ResourcePackManager extends LocalAddonManager<ResourcePackFil
         optionsFileEncoding = bestEncoding != null && bestEncoding.approximateCharset() != null
                 ? bestEncoding.approximateCharset() : StandardCharsets.UTF_8;
         //noinspection DataFlowIssue
-        new String(bytes, optionsFileEncoding).lines().forEach(s -> {
+        // Android 的 String 没有 lines()（Java 11+），用 split 兼容
+        String[] lines = new String(bytes, optionsFileEncoding).split("\\r?\\n", -1);
+        for (String s : lines) {
             if (StringUtils.isNotBlank(s)) {
                 var entry = s.split(":", 2);
                 if (entry.length == 2) {
                     options.put(entry[0], entry[1]);
                 }
             }
-        });
+        }
         return options;
     }
 

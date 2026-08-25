@@ -160,7 +160,7 @@ fun MultiplayerScreen(onBack: () -> Unit) {
         // 页签
         LazyRow(modifier = Modifier.padding(horizontal = 16.dp)) {
             item {
-                listOf("服务器列表", "本机开服").forEachIndexed { i, label ->
+                listOf("服务器列表", "本机开服", "陶瓦联机").forEachIndexed { i, label ->
                     Surface(
                         onClick = { tab = i },
                         shape = RoundedCornerShape(20.dp),
@@ -867,6 +867,10 @@ fun MultiplayerScreen(onBack: () -> Unit) {
                     }
                     item { Spacer(Modifier.height(16.dp)) }
                 }
+            }
+
+            2 -> {
+                TerracottaPanel(onBack = { tab = 0 })
             }
         }
     }

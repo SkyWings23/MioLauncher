@@ -359,6 +359,47 @@ fun VirtualControlsScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) { load() }
 
+    // 键位导入：选 FCL/ZL2 布局 JSON → 复制到 controlmap/<name>.json → 切换过去
+    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val result = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        val name = (context.contentResolver.query(
+                            uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null
+                        )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+                            ?: "导入").substringBeforeLast('.').ifBlank { "导入" }
+                            .replace(Regex("[^A-Za-z0-9_\\u4e00-\\u9fa5-]"), "_")
+                        val f = File(controlMapDir, "$name.json")
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            f.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        // 校验是合法布局 JSON（至少含控制列表键）
+                        val txt = f.readText()
+                        val root = com.google.gson.JsonParser.parseString(txt).asJsonObject
+                        if (!root.has("mControlDataList") && !root.has("version")) {
+                            throw Exception("不是有效的键位布局文件")
+                        }
+                        name
+                    }
+                }
+                result.onSuccess { name ->
+                    // 切换到新导入的键位组
+                    currentGroup = name
+                    context.getSharedPreferences("mio_settings", Context.MODE_PRIVATE)
+                        .edit().putString("current_group", name).apply()
+                    loaded = false
+                    load()
+                    toastOnMain(context, "已导入键位「$name」，可修改后保存")
+                }.onFailure { e ->
+                    toastOnMain(context, "导入失败：${e.message}")
+                }
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         // 顶栏：返回 + 按键组切换 + 添加 + 保存
         Row(
@@ -408,6 +449,11 @@ fun VirtualControlsScreen(onBack: () -> Unit) {
                 Icon(Icons.Filled.Add, contentDescription = "添加", tint = MioGreen, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(2.dp))
                 Text("添加", color = MioGreen)
+            }
+            TextButton(onClick = {
+                importLauncher.launch(arrayOf("application/json", "text/json", "*/*"))
+            }) {
+                Text("导入", color = MioGreen)
             }
             TextButton(onClick = { save() }) { Text("保存", color = MioGreen, fontWeight = FontWeight.Bold) }
         }

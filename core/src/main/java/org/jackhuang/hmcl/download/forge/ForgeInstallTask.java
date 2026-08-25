@@ -126,22 +126,22 @@ public final class ForgeInstallTask extends Task<GameInstancePatch> {
     public static boolean detectForgeInstallerType(DependencyManager dependencyManager, GameInstanceManifest manifest, Path installer) throws IOException, VersionMismatchException {
         Optional<String> gameVersion = dependencyManager.getGameRepository().getGameVersion(manifest);
         if (!gameVersion.isPresent()) throw new IOException();
-        try (FileSystem fs = CompressingUtils.createReadOnlyZipFileSystem(installer)) {
-            String installProfileText = AndroidFiles.readString(fs.getPath("install_profile.json"));
-            Map<?, ?> installProfile = JsonUtils.fromNonNullJson(installProfileText, Map.class);
-            if (installProfile.containsKey("spec")) {
-                ForgeNewInstallProfile profile = JsonUtils.fromNonNullJson(installProfileText, ForgeNewInstallProfile.class);
-                if (!gameVersion.get().equals(profile.getMinecraft()))
-                    throw new VersionMismatchException(profile.getMinecraft(), gameVersion.get());
-                return true;
-            } else if (installProfile.containsKey("install") && installProfile.containsKey("versionInfo")) {
-                ForgeInstallProfile profile = JsonUtils.fromNonNullJson(installProfileText, ForgeInstallProfile.class);
-                if (!gameVersion.get().equals(profile.install().getMinecraft()))
-                    throw new VersionMismatchException(profile.install().getMinecraft(), gameVersion.get());
-                return false;
-            } else {
-                throw new IOException();
-            }
+        // Android 的 app 进程（ART）没有 jdk.zipfs 模块，不能用 FileSystem 读取 zip，
+        // 改用标准 java.util.zip.ZipFile 读取 install_profile.json。
+        String installProfileText = readInstallProfile(installer);
+        Map<?, ?> installProfile = JsonUtils.fromNonNullJson(installProfileText, Map.class);
+        if (installProfile.containsKey("spec")) {
+            ForgeNewInstallProfile profile = JsonUtils.fromNonNullJson(installProfileText, ForgeNewInstallProfile.class);
+            if (!gameVersion.get().equals(profile.getMinecraft()))
+                throw new VersionMismatchException(profile.getMinecraft(), gameVersion.get());
+            return true;
+        } else if (installProfile.containsKey("install") && installProfile.containsKey("versionInfo")) {
+            ForgeInstallProfile profile = JsonUtils.fromNonNullJson(installProfileText, ForgeInstallProfile.class);
+            if (!gameVersion.get().equals(profile.install().getMinecraft()))
+                throw new VersionMismatchException(profile.install().getMinecraft(), gameVersion.get());
+            return false;
+        } else {
+            throw new IOException();
         }
     }
 
@@ -159,21 +159,31 @@ public final class ForgeInstallTask extends Task<GameInstancePatch> {
     public static Task<GameInstancePatch> install(DefaultDependencyManager dependencyManager, GameInstanceManifest manifest, Path installer) throws IOException, VersionMismatchException {
         Optional<String> gameVersion = dependencyManager.getGameRepository().getGameVersion(manifest);
         if (!gameVersion.isPresent()) throw new IOException();
-        try (FileSystem fs = CompressingUtils.createReadOnlyZipFileSystem(installer)) {
-            String installProfileText = AndroidFiles.readString(fs.getPath("install_profile.json"));
-            Map<?, ?> installProfile = JsonUtils.fromNonNullJson(installProfileText, Map.class);
-            if (installProfile.containsKey("spec")) {
-                ForgeNewInstallProfile profile = JsonUtils.fromNonNullJson(installProfileText, ForgeNewInstallProfile.class);
-                if (!gameVersion.get().equals(profile.getMinecraft()))
-                    throw new VersionMismatchException(profile.getMinecraft(), gameVersion.get());
-                return new ForgeNewInstallTask(dependencyManager, manifest, modifyVersion(gameVersion.get(), profile.getVersion()), installer);
-            } else if (installProfile.containsKey("install") && installProfile.containsKey("versionInfo")) {
-                ForgeInstallProfile profile = JsonUtils.fromNonNullJson(installProfileText, ForgeInstallProfile.class);
-                if (!gameVersion.get().equals(profile.install().getMinecraft()))
-                    throw new VersionMismatchException(profile.install().getMinecraft(), gameVersion.get());
-                return new ForgeOldInstallTask(dependencyManager, manifest, modifyVersion(gameVersion.get(), profile.install().getPath().getVersion().replaceAll("(?i)forge", "")), installer);
-            } else {
-                throw new IOException();
+        String installProfileText = readInstallProfile(installer);
+        Map<?, ?> installProfile = JsonUtils.fromNonNullJson(installProfileText, Map.class);
+        if (installProfile.containsKey("spec")) {
+            ForgeNewInstallProfile profile = JsonUtils.fromNonNullJson(installProfileText, ForgeNewInstallProfile.class);
+            if (!gameVersion.get().equals(profile.getMinecraft()))
+                throw new VersionMismatchException(profile.getMinecraft(), gameVersion.get());
+            return new ForgeNewInstallTask(dependencyManager, manifest, modifyVersion(gameVersion.get(), profile.getVersion()), installer);
+        } else if (installProfile.containsKey("install") && installProfile.containsKey("versionInfo")) {
+            ForgeInstallProfile profile = JsonUtils.fromNonNullJson(installProfileText, ForgeInstallProfile.class);
+            if (!gameVersion.get().equals(profile.install().getMinecraft()))
+                throw new VersionMismatchException(profile.install().getMinecraft(), gameVersion.get());
+            return new ForgeOldInstallTask(dependencyManager, manifest, modifyVersion(gameVersion.get(), profile.install().getPath().getVersion().replaceAll("(?i)forge", "")), installer);
+        } else {
+            throw new IOException();
+        }
+    }
+
+    /// 用标准 ZipFile 读取 Forge installer 的 install_profile.json
+    /// （Android app 进程没有 jdk.zipfs，FileSystem 不可用）。
+    private static String readInstallProfile(Path installer) throws IOException {
+        try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(installer.toFile())) {
+            java.util.zip.ZipEntry entry = zf.getEntry("install_profile.json");
+            if (entry == null) throw new IOException("install_profile.json not found in Forge installer");
+            try (java.io.InputStream is = zf.getInputStream(entry)) {
+                return new String(org.jackhuang.hmcl.util.io.IOUtils.readFully(is), java.nio.charset.StandardCharsets.UTF_8);
             }
         }
     }

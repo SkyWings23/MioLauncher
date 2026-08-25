@@ -314,7 +314,8 @@ public final class Logger {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         try {
             exportLogs(output);
-            return output.toString(UTF_8);
+            // Android 的 ByteArrayOutputStream 没有 toString(Charset)（Java 10+ API）
+            return new String(output.toByteArray(), UTF_8);
         } catch (IOException e) {
             log(Level.WARNING, CLASS_NAME + ".getLogs", "Failed to export logs", e);
             return "";
