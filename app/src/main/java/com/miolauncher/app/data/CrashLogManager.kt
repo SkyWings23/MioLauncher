@@ -105,17 +105,26 @@ object CrashLogManager {
     /** 构造分享 Intent（完整日志文件），返回 null 表示写入失败 */
     fun shareIntent(context: Context, title: String, fileName: String, content: String): android.content.Intent? {
         val f = shareFile(context, fileName, content) ?: return null
-        val uri = androidx.core.content.FileProvider.getUriForFile(
-            context,
-            context.packageName + ".fileprovider",
-            f,
-        )
-        return android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(android.content.Intent.EXTRA_SUBJECT, title)
-            putExtra(android.content.Intent.EXTRA_TEXT, title + "（完整日志见附件）")
-            putExtra(android.content.Intent.EXTRA_STREAM, uri)
-            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        return try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                context.packageName + ".fileprovider",
+                f,
+            )
+            android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(android.content.Intent.EXTRA_SUBJECT, title)
+                putExtra(android.content.Intent.EXTRA_TEXT, title + "（完整日志见附件）")
+                putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        } catch (_: Exception) {
+            // FileProvider 找不到配置的 root（异常目录）等 → 兜底降级为纯文本分享
+            android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(android.content.Intent.EXTRA_SUBJECT, title)
+                putExtra(android.content.Intent.EXTRA_TEXT, title + "\n\n" + content)
+            }
         }
     }
 
