@@ -142,8 +142,8 @@ private fun PatchDownloadScreen(activity: PatchDownloadActivity, mode: String = 
             // ---- APK 更新模式：优先用启动时缓存的更新信息，没有再联网拉取 ----
             val update = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 try {
-                    com.miolauncher.app.data.PatchManager.fetchAppUpdateCached()
-                        ?: com.miolauncher.app.data.PatchManager.fetchAppUpdate(context)
+                    com.miolauncher.app.data.PatchManager.clearUpdateCache()
+                    com.miolauncher.app.data.PatchManager.fetchAppUpdate(context)
                 } catch (_: Throwable) {
                     null
                 }
