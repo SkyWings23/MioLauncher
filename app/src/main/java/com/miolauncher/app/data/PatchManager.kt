@@ -702,13 +702,59 @@ object PatchManager {
             probeFutures.forEach { it.get() }
             probePool.shutdown()
             val alive = endpoints.filter { aliveResult[it] == true }
-            val useEndpoints = alive.ifEmpty { listOf(base) }
-            android.util.Log.i("PatchManager", "download: alive endpoints=${useEndpoints.size}/${endpoints.size}")
+            // 测速排序：每个存活端点下载 256KB 样本测速，按速度降序。
+            // 平板家宽隧道（~3MB/s）排到腾讯云公网（~400KB/s）前 → 快端点分到大部分分片，
+            // 慢端点（腾讯云）只分到小份，不再被它的 400KB/s 拖累总下载时长。
+            val speedList = java.util.Collections.synchronizedList(ArrayList<Pair<String, Long>>())
+            val speedPool = java.util.concurrent.Executors.newFixedThreadPool(minOf(alive.size, 6))
+            val speedFutures = alive.map { ep ->
+                speedPool.submit {
+                    try {
+                        val c = URL("$ep/api/app/latest.apk").openConnection() as HttpURLConnection
+                        c.requestMethod = "GET"
+                        c.connectTimeout = 6000
+                        c.readTimeout = 12000
+                        c.setRequestProperty("Authorization", authHeader())
+                        c.setRequestProperty("User-Agent", "MioLauncher/updater")
+                        c.setRequestProperty("Range", "bytes=0-262143")
+                        if (c.responseCode == 206) {
+                            val st = System.currentTimeMillis()
+                            val input = c.inputStream
+                            val buf = ByteArray(65536)
+                            var got = 0L
+                            while (got < 262144L) {
+                                val r = input.read(buf)
+                                if (r == -1) break
+                                got += r
+                            }
+                            input.close()
+                            val ms = (System.currentTimeMillis() - st).coerceAtLeast(1L)
+                            speedList.add(ep to (got * 1000L / ms))
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            speedFutures.forEach { runCatching { it.get() } }
+            speedPool.shutdown()
+            speedList.sortByDescending { it.second }
+            val useEndpoints = speedList.map { it.first }.ifEmpty { alive.ifEmpty { listOf(base) } }
+            val speeds = if (speedList.isNotEmpty()) speedList.map { it.second.coerceAtLeast(1L) }
+                         else useEndpoints.map { 51200L }  // 未知速度按 50KB/s 兜底
+            android.util.Log.i(
+                "PatchManager",
+                "download: alive=${alive.size}, endpoints=${speedList.map { "${it.second / 1024}KB/s" }}",
+            )
 
-            // 线程数 = 隧道数，上限 16。分片大小 ≈ total/隧道数。
-            // 注意：每分片下载时间 = 分片大小 / 隧道速率(~130KB/s)，必须给足分片超时。
-            val threads = useEndpoints.size.coerceIn(4, 16)
-            val chunk = (total / threads) + 1
+            // 线程 = 每端点一个，上限 16。分片大小按端点速度加权分配（快端点拿大份）。
+            val threads = useEndpoints.size.coerceIn(2, 16)
+            val totalWeight = speeds.sum()
+            val bounds = LongArray(threads)
+            var cum = 0L
+            for (t in 0 until threads) {
+                cum += (total * speeds[t % speeds.size]) / totalWeight
+                bounds[t] = minOf(cum, total - 1)
+            }
             // 断点续传：不清空临时文件，跳过 tmp 中已写满的字节（退出/中断后下次从断点继续）。
             // tmp 大小即已下载的连续前缀长度（分片写入是稀疏的，但安全起见只信任文件实际大小）。
             val resumeFrom = if (tmp.isFile && tmp.length() > 0) tmp.length() else 0L
@@ -724,10 +770,13 @@ object PatchManager {
 
             // 下载中的失败分片范围（并发安全），全部完成后用稳定通道补齐
             val failedChunks = java.util.concurrent.ConcurrentLinkedQueue<LongArray>()
+            var prev = -1L
             for (t in 0 until threads) {
-                val start = maxOf(t * chunk, resumeFrom)  // 跳过已下载前缀
-                val end = minOf((t + 1) * chunk - 1, total - 1)
-                if (start >= total) continue
+                val chunkEnd = bounds[t]
+                val start = maxOf(prev + 1, resumeFrom)  // 跳过已下载前缀
+                val end = chunkEnd
+                prev = chunkEnd
+                if (start >= total || end < start) continue
                 // 分片轮询分配隧道：t=0→ep0, t=1→ep1, ... 突破单隧道限速
                 val ep = useEndpoints[t % useEndpoints.size]
                 tasks.add(pool.submit {
