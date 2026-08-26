@@ -35,10 +35,19 @@ dependencies {
 
     // HMCLCore dependencies
     implementation("com.google.code.gson:gson:2.11.0")
-    implementation("org.glavo.kala:kala-compress-archivers-zip:1.27.1-3")
+    implementation("org.glavo.kala:kala-compress-archivers-zip:1.27.1-3") {
+        // kala-compress-base 用打过补丁的本地 jar 替代（ByteUtils 换成无 VarHandle 版，
+        // 避免与 core 源码替换类在 dex 合并时类型重复）
+        exclude(group = "org.glavo.kala", module = "kala-compress-base")
+    }
     // 自打包的 jdk.zipfs 替代（Android ART 无 zipfs，提供 FileSystemProvider）
     implementation(files("libs/zipfs.jar"))
-    implementation("org.glavo.kala:kala-compress-archivers-tar:1.27.1-3")
+    // kala-compress-base 打补丁版：ByteUtils 用纯位运算实现（无 VarHandle），
+    // 修复 Android API 27-31 上 ART 验证器 VerifyError 导致整合包安装崩溃
+    implementation(files("libs/kala-compress-base-patched.jar"))
+    implementation("org.glavo.kala:kala-compress-archivers-tar:1.27.1-3") {
+        exclude(group = "org.glavo.kala", module = "kala-compress-base")
+    }
     implementation("org.glavo:kala-encoding-detector:0.1.0")
     implementation("org.glavo:simple-png-javafx:0.3.0")
     implementation("org.tomlj:tomlj:1.1.1")

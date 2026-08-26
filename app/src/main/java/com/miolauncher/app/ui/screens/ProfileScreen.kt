@@ -29,6 +29,8 @@ import androidx.compose.material.icons.filled.VideogameAsset
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -92,6 +94,12 @@ fun ProfileScreen(
     var pageAnimEnabled by remember { mutableStateOf(com.miolauncher.app.data.UiSettingsStore.pageAnimationEnabled(context)) }
     var pageAnimMs by remember { mutableStateOf(com.miolauncher.app.data.UiSettingsStore.pageAnimationMs(context)) }
     var showAnimDurationDialog by remember { mutableStateOf(false) }
+    var allowDailyPush by remember { mutableStateOf(com.miolauncher.app.data.DiscoverStore.allowDailyPush(context)) }
+    var pushHour by remember { mutableStateOf(com.miolauncher.app.data.DiscoverStore.pushHour(context)) }
+    var showHourDialog by remember { mutableStateOf(false) }
+    val notifPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { }
 
     // 主页「启动设置」卡片 → 自动打开本页设置
     LaunchedEffect(openLaunchSettings) {
@@ -192,6 +200,25 @@ fun ProfileScreen(
             },
             pageAnimMs = pageAnimMs,
             onOpenAnimDuration = { showAnimDurationDialog = true },
+        )
+        Spacer(Modifier.height(16.dp))
+        // 每日精品推荐设置
+        DailyPushSettings(
+            allow = allowDailyPush,
+            hour = pushHour,
+            onAllowChange = { on ->
+                allowDailyPush = on
+                com.miolauncher.app.data.DiscoverStore.setAllowDailyPush(context, on)
+                if (on) {
+                    if (android.os.Build.VERSION.SDK_INT >= 33) {
+                        notifPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    com.miolauncher.app.data.DailyRecommendWorker.schedule(context)
+                } else {
+                    com.miolauncher.app.data.DailyRecommendWorker.cancel(context)
+                }
+            },
+            onHourClick = { showHourDialog = true },
         )
         Spacer(Modifier.height(16.dp))
         DebugJvmTest()
@@ -432,6 +459,34 @@ fun ProfileScreen(
             },
         )
     }
+
+    if (showHourDialog) {
+        AlertDialog(
+            onDismissRequest = { showHourDialog = false },
+            title = { Text("每日推荐推送时间", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    listOf(12 to "中午 12:00", 20 to "晚上 20:00").forEach { (h, label) ->
+                        androidx.compose.material3.ListItem(
+                            headlineContent = { Text(label, fontWeight = if (pushHour == h) FontWeight.Bold else FontWeight.Normal) },
+                            trailingContent = if (pushHour == h) {
+                                { Icon(Icons.Filled.CheckCircle, null, tint = MioGreen) }
+                            } else null,
+                            modifier = Modifier.clickable {
+                                pushHour = h
+                                com.miolauncher.app.data.DiscoverStore.setPushHour(context, h)
+                                com.miolauncher.app.data.DailyRecommendWorker.schedule(context)
+                                showHourDialog = false
+                            },
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHourDialog = false }) { Text("关闭") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -599,6 +654,42 @@ private fun SettingsGroup(
         )
         SettingRow(Icons.Filled.Person, com.miolauncher.app.ui.theme.I18n.tr("profile.about"), "v${com.miolauncher.app.BuildConfig.VERSION_NAME} · GPL-3.0", onClick = onOpenAbout)
         SettingRow(Icons.Filled.Group, "加入我们", "交流群 / Bug 提交群", onClick = onOpenJoinUs)
+    }
+}
+
+@Composable
+/** 每日精品推荐设置（总开关 + 推送时间） */
+private fun DailyPushSettings(
+    allow: Boolean,
+    hour: Int,
+    onAllowChange: (Boolean) -> Unit,
+    onHourClick: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            text = "📣 每日推荐",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        SettingRow(
+            Icons.Filled.Notifications,
+            "允许每日精品推荐",
+            if (allow) "已开启 · 每日推送好服" else "已关闭 · 不会错过启动器更新",
+            onClick = null,
+            trailing = {
+                androidx.compose.material3.Switch(
+                    checked = allow,
+                    onCheckedChange = onAllowChange,
+                )
+            },
+        )
+        SettingRow(
+            Icons.Filled.Schedule,
+            "推送时间",
+            if (hour == 20) "晚上 20:00" else "中午 12:00" + " · 22:00~08:00 免打扰",
+            onClick = onHourClick,
+        )
     }
 }
 

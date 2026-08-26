@@ -76,6 +76,7 @@ fun HomeScreen(
     onNavigateToTab: (Int) -> Unit = {},
     onOpenDownloadTab: (Int) -> Unit = {},
     onOpenLaunchSettings: () -> Unit = {},
+    onOpenDiscover: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var installedVersions by remember { mutableStateOf<List<GameVersion>>(emptyList()) }
@@ -281,6 +282,7 @@ fun HomeScreen(
             onNavigateToTab = onNavigateToTab,
             onOpenDownloadTab = onOpenDownloadTab,
             onOpenLaunchSettings = onOpenLaunchSettings,
+            onOpenDiscover = onOpenDiscover,
             context = context,
         )
         Spacer(Modifier.height(24.dp))
@@ -626,9 +628,17 @@ private fun FeatureGrid(
     onNavigateToTab: (Int) -> Unit,
     onOpenDownloadTab: (Int) -> Unit,
     onOpenLaunchSettings: () -> Unit,
+    onOpenDiscover: () -> Unit = {},
     context: Context,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // 发现好服：核心入口，全宽醒目卡片
+        MioFeatureCard(
+            title = "🔥 发现好服",
+            subtitle = "热门服务器 · 每日推荐 · 一键进服",
+            onClick = onOpenDiscover,
+            modifier = Modifier.fillMaxWidth(),
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             MioFeatureCard(
                 title = com.miolauncher.app.ui.theme.I18n.tr("home.version_mgmt"),

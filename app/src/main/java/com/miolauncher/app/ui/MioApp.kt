@@ -269,6 +269,13 @@ fun MioApp() {
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     MioLauncherTheme(darkTheme = darkTheme) {
+        // 每日推荐通知点击：消费待打开服务器，自动切到「发现」页并打开该服详情（只触发一次）
+        var pendingDiscoverSrv by remember { mutableStateOf(com.miolauncher.app.data.DiscoverNav.consume()) }
+        LaunchedEffect(pendingDiscoverSrv) {
+            if (pendingDiscoverSrv != null && currentTab != MainTab.DISCOVER) {
+                currentTab = MainTab.DISCOVER
+            }
+        }
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
@@ -353,6 +360,7 @@ fun MioApp() {
                                     openLaunchSettings = true
                                     currentTab = MainTab.PROFILE
                                 },
+                                onOpenDiscover = { currentTab = MainTab.DISCOVER },
                             )
                             MainTab.DOWNLOAD -> DownloadScreen(
                                 selectedTab = downloadTab,
@@ -379,6 +387,12 @@ fun MioApp() {
                                 onConsumeOpenLaunchSettings = { openLaunchSettings = false },
                             )
                             MainTab.MULTIPLAYER -> MultiplayerScreen(onBack = { currentTab = MainTab.HOME })
+                            MainTab.DISCOVER -> {
+                                com.miolauncher.app.ui.screens.ServerDiscoveryScreen(
+                                    initialServerId = pendingDiscoverSrv,
+                                    onConsumedInitial = { pendingDiscoverSrv = null },
+                                )
+                            }
                         }
                     }
 
@@ -1079,4 +1093,5 @@ private fun tabLabel(tab: MainTab): String = when (tab) {
     MainTab.RESOURCE -> com.miolauncher.app.ui.theme.I18n.tr("nav.resource")
     MainTab.PROFILE -> com.miolauncher.app.ui.theme.I18n.tr("nav.profile")
     MainTab.MULTIPLAYER -> "联机"
+    MainTab.DISCOVER -> com.miolauncher.app.ui.theme.I18n.tr("nav.discover")
 }

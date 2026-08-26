@@ -21,8 +21,8 @@ android {
         applicationId = "com.miolauncher.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 23
-        versionName = "0.1.4-17"
+        versionCode = 24
+        versionName = "0.1.4-18"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
@@ -96,5 +96,6 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

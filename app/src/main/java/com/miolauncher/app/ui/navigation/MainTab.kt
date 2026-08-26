@@ -2,6 +2,7 @@ package com.miolauncher.app.ui.navigation
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Public
@@ -18,4 +19,5 @@ enum class MainTab(
     RESOURCE("resource", "资源", Icons.Filled.ShoppingBag),
     PROFILE("profile", "我的", Icons.Filled.Person),
     MULTIPLAYER("multiplayer", "联机", Icons.Filled.Public),
+    DISCOVER("discover", "发现", Icons.Filled.Explore),
 }

@@ -31,6 +31,7 @@ object I18n {
         "nav.download" to ("下载" to "Download"),
         "nav.resource" to ("资源" to "Resources"),
         "nav.profile" to ("我的" to "Profile"),
+        "nav.discover" to ("发现" to "Discover"),
 
         // 主页
         "home.tagline" to ("自由 · 开源 · 属于你的 Minecraft 启动器" to "Free · Open-source · Your Minecraft launcher"),

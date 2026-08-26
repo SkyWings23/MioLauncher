@@ -20,6 +20,13 @@ class MioApplication : Application() {
             rt.gc()
         } catch (_: Exception) {}
 
+        // 注册每日精品推荐定时任务（开关开启时）；WorkManager 会持久化，重启也保持。
+        try {
+            if (com.miolauncher.app.data.DiscoverStore.allowDailyPush(this)) {
+                com.miolauncher.app.data.DailyRecommendWorker.schedule(this)
+            }
+        } catch (_: Exception) {}
+
         // 全局崩溃捕获：任何未捕获异常（主线程/其他线程）都写入日志文件，
         // 即使启动器 app 闪退，下次启动也能看到崩溃原因。
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
