@@ -42,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -339,13 +340,42 @@ fun ServerDetailScreen(
 
 @Composable
 private fun ServerLogoBig(server: DiscoverServer) {
-    Box(
-        modifier = Modifier
-            .size(64.dp)
-            .background(Brush.horizontalGradient(ServerDiscoveryPalettes[Math.floorMod(server.id.hashCode(), ServerDiscoveryPalettes.size)]), RoundedCornerShape(14.dp)),
-        contentAlignment = Alignment.Center,
+    val bitmap by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(
+        initialValue = null, key1 = server.logo,
     ) {
-        Text(server.name.take(1).ifEmpty { "服" }, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        value = if (server.logo.isBlank()) null else kotlinx.coroutines.withContext(Dispatchers.IO) {
+            try {
+                val conn = java.net.URL(server.logo).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 6000
+                conn.readTimeout = 6000
+                android.graphics.BitmapFactory.decodeStream(conn.inputStream)
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+    val shape = RoundedCornerShape(14.dp)
+    if (bitmap != null) {
+        androidx.compose.foundation.Image(
+            bitmap = bitmap!!.asImageBitmap(),
+            contentDescription = server.name,
+            modifier = Modifier.size(64.dp).clip(shape),
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+        )
+    } else {
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .background(
+                    Brush.horizontalGradient(
+                        ServerDiscoveryPalettes[Math.floorMod(server.id.hashCode(), ServerDiscoveryPalettes.size)],
+                    ),
+                    shape,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(server.name.take(1).ifEmpty { "服" }, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
 

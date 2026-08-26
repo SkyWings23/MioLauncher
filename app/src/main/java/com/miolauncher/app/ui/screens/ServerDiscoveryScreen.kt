@@ -41,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -49,9 +50,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.miolauncher.app.data.DiscoverReview
@@ -61,6 +65,7 @@ import com.miolauncher.app.data.GameLauncher
 import com.miolauncher.app.data.MioRepository
 import com.miolauncher.app.data.ServerDiscoveryApi
 import com.miolauncher.app.ui.theme.MioGreen
+import java.net.HttpURLConnection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -392,7 +397,7 @@ private fun bannerColors(id: String): List<Color> {
     return BANNER_PALETTES[idx]
 }
 
-/** 服务器信息流卡片 */
+/** 服务器信息流卡片（紧凑布局） */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ServerCard(
@@ -403,63 +408,74 @@ private fun ServerCard(
     onNotInterested: () -> Unit,
 ) {
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surface,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 5.dp)
+            .padding(horizontal = 12.dp, vertical = 3.dp)
             .combinedClickable(onClick = onOpen, onLongClick = onNotInterested),
     ) {
-        Column(Modifier.padding(12.dp)) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            // 主行：头像 + 名称/标签 + 在线 + 进服按钮
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ServerLogo(server)
-                Spacer(Modifier.width(10.dp))
+                ServerAvatar(server)
+                Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(server.name, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text(
+                            server.name,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                         server.badge.takeIf { it.isNotBlank() }?.let { badge ->
-                            Spacer(Modifier.width(5.dp))
+                            Spacer(Modifier.width(4.dp))
                             Text(
                                 badge,
-                                fontSize = 10.sp,
+                                fontSize = 9.sp,
                                 color = Color.White,
                                 modifier = Modifier
                                     .background(
                                         if (badge == "满人") Color(0xFFE03131) else MioGreen,
-                                        RoundedCornerShape(5.dp),
+                                        RoundedCornerShape(4.dp),
                                     )
-                                    .padding(horizontal = 5.dp, vertical = 1.dp),
+                                    .padding(horizontal = 4.dp, vertical = 0.dp),
                             )
                         }
-                        Spacer(Modifier.weight(1f))
-                        Text("● ${server.online} 人在线", fontSize = 12.sp, color = MioGreen)
                     }
-                    Spacer(Modifier.height(2.dp))
                     Text(
                         "${server.version} | ${server.mode} | ${server.tags.joinToString("、")}",
-                        fontSize = 12.sp,
+                        fontSize = 10.sp,
                         color = Color.Gray,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-            }
-            Spacer(Modifier.height(8.dp))
-            RatingRow(server)
-            if (reviews.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                ReviewMarquee(reviews)
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Spacer(Modifier.width(8.dp))
+                Text("● ${server.online}", fontSize = 11.sp, color = MioGreen)
+                Spacer(Modifier.width(8.dp))
                 TextButton(
                     onClick = onJoin,
                     colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
                         contentColor = Color.White,
                         containerColor = Color(0xFFE8590C),
                     ),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 10.dp, vertical = 2.dp,
+                    ),
+                    modifier = Modifier.height(30.dp),
                 ) {
-                    Text("🚀 立即进入", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("🚀 进入", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            // 元信息行：好评率 + 最新短评跑马灯
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RatingCompact(server)
+                Spacer(Modifier.width(10.dp))
+                if (reviews.isNotEmpty()) {
+                    ReviewMarquee(reviews)
                 }
             }
         }
@@ -467,44 +483,64 @@ private fun ServerCard(
 }
 
 @Composable
-private fun ServerLogo(server: DiscoverServer) {
-    Box(
-        modifier = Modifier
-            .size(52.dp)
-            .background(bannerColors(server.id).first(), RoundedCornerShape(12.dp)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            server.name.take(1).ifEmpty { "服" },
-            color = Color.White,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold,
+private fun ServerAvatar(server: DiscoverServer, size: Dp = 40.dp) {
+    val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, key1 = server.logo) {
+        value = if (server.logo.isBlank()) null else withContext(Dispatchers.IO) {
+            try {
+                val conn = java.net.URL(server.logo).openConnection() as HttpURLConnection
+                conn.connectTimeout = 6000
+                conn.readTimeout = 6000
+                android.graphics.BitmapFactory.decodeStream(conn.inputStream)
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+    if (bitmap != null) {
+        androidx.compose.foundation.Image(
+            bitmap = bitmap!!.asImageBitmap(),
+            contentDescription = server.name,
+            modifier = Modifier.size(size).clip(RoundedCornerShape(9.dp)),
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
         )
+    } else {
+        Box(
+            modifier = Modifier
+                .size(size)
+                .background(bannerColors(server.id).first(), RoundedCornerShape(9.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                server.name.take(1).ifEmpty { "服" },
+                color = Color.White,
+                fontSize = (size.value * 0.42f).sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
     }
 }
 
+/** 紧凑好评率（细进度条 + 百分比一行内） */
 @Composable
-private fun RatingRow(server: DiscoverServer) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        if (server.hasRating) {
-            val rate = server.rating ?: 0
-            Box(Modifier.width(100.dp)) {
+private fun RatingCompact(server: DiscoverServer) {
+    if (server.hasRating) {
+        val rate = server.rating ?: 0
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(42.dp).height(4.dp).clip(RoundedCornerShape(2.dp))) {
                 LinearProgressIndicator(
                     progress = { rate / 100f },
-                    modifier = Modifier
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(4.dp)),
+                    modifier = Modifier.fillMaxSize(),
                     color = MioGreen,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant,
                 )
             }
-            Spacer(Modifier.width(8.dp))
-            Text("$rate% 好评", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MioGreen)
-            Spacer(Modifier.width(6.dp))
-            Text("共 ${server.reviewCount} 条评价", fontSize = 11.sp, color = Color.Gray)
-        } else {
-            Text("新服暂无评分（少于 10 条评价）", fontSize = 12.sp, color = Color.Gray)
+            Spacer(Modifier.width(5.dp))
+            Text("$rate%", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MioGreen)
+            Spacer(Modifier.width(4.dp))
+            Text("(${server.reviewCount}评)", fontSize = 10.sp, color = Color.Gray)
         }
+    } else {
+        Text("新服暂无评分", fontSize = 10.sp, color = Color.Gray)
     }
 }
 
@@ -523,11 +559,11 @@ private fun ReviewMarquee(reviews: List<DiscoverReview>) {
     AnimatedContent(targetState = index) { i ->
         val r = reviews[i.coerceIn(0, reviews.size - 1)]
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text(if (r.good) "👍" else "👎", fontSize = 12.sp)
-            Spacer(Modifier.width(4.dp))
+            Text(if (r.good) "👍" else "👎", fontSize = 10.sp)
+            Spacer(Modifier.width(3.dp))
             Text(
                 if (r.comment.isNotBlank()) "\"${r.comment}\"" else "（用户评价，无文字）",
-                fontSize = 12.sp,
+                fontSize = 10.sp,
                 color = Color(0xFFB0BEC5),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
