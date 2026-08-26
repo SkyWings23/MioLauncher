@@ -61,6 +61,16 @@ class UpdateDownloadService : Service() {
         fun start(context: Context, update: AppUpdate) {
             cancelRequested = false
             state = DownloadState(running = false, versionName = update.versionName)
+            val patchListJson = org.json.JSONArray().apply {
+                for (p in update.patchList) {
+                    put(
+                        org.json.JSONObject()
+                            .put("baseCode", p.baseCode)
+                            .put("file", p.file)
+                            .put("size", p.size),
+                    )
+                }
+            }.toString()
             val intent = Intent(context, UpdateDownloadService::class.java)
                 .setAction(ACTION_START)
                 .putExtra("versionName", update.versionName)
@@ -69,6 +79,10 @@ class UpdateDownloadService : Service() {
                 .putExtra("sha256", update.sha256)
                 .putExtra("size", update.size)
                 .putExtra("desc", update.desc)
+                .putExtra("patchFile", update.patchFile)
+                .putExtra("patchBaseCode", update.patchBaseCode)
+                .putExtra("patchSize", update.patchSize)
+                .putExtra("patchListJson", patchListJson)
             if (android.os.Build.VERSION.SDK_INT >= 26) {
                 context.startForegroundService(intent)
             } else {
@@ -99,6 +113,20 @@ class UpdateDownloadService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_START -> {
+                val patchList = ArrayList<com.miolauncher.app.data.IncrementalPatch>()
+                try {
+                    val arr = org.json.JSONArray(intent.getStringExtra("patchListJson") ?: "[]")
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        val base = o.optInt("baseCode", 0)
+                        val file = o.optString("file", "")
+                        if (base > 0 && file.isNotBlank()) {
+                            patchList.add(
+                                com.miolauncher.app.data.IncrementalPatch(base, file, o.optLong("size", 0L)),
+                            )
+                        }
+                    }
+                } catch (_: Exception) {}
                 val update = AppUpdate(
                     versionName = intent.getStringExtra("versionName") ?: "",
                     versionCode = intent.getIntExtra("versionCode", 0),
@@ -106,6 +134,10 @@ class UpdateDownloadService : Service() {
                     sha256 = intent.getStringExtra("sha256") ?: "",
                     size = intent.getLongExtra("size", 0L),
                     desc = intent.getStringExtra("desc") ?: "",
+                    patchFile = intent.getStringExtra("patchFile") ?: "",
+                    patchBaseCode = intent.getIntExtra("patchBaseCode", 0),
+                    patchSize = intent.getLongExtra("patchSize", 0L),
+                    patchList = patchList,
                 )
                 startForegroundInternal()
                 state = state.copy(running = true, versionName = update.versionName)
