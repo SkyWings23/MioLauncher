@@ -737,8 +737,11 @@ object PatchManager {
                     try {
                         raf = java.io.RandomAccessFile(tmp, "rw")
                         var pos = start
-                        // 分片级硬超时：每分片约 18MB @130KB/s ≈ 2.4 分钟，给 180 秒缓冲
-                        val chunkDeadline = System.currentTimeMillis() + 180000L
+                        // 分片级硬超时：按分片大小估算（最低 50KB/s，上限 20 分钟）。
+                        // 腾讯云出口仅 ~350KB/s，290MB 全量包多线程共享下每个分片可能很慢，
+                        // 固定 180 秒会把慢连接判失败 → 全部走顺序补齐（更慢）。
+                        val perChunkSec = ((end - start) / 51200L).coerceIn(180L, 1200L)
+                        val chunkDeadline = System.currentTimeMillis() + perChunkSec * 1000L
                         // 分片内部用小块请求：cpolar 免费隧道大 Range 长连接会返回损坏数据，
                         // 每 256KB 重新发 Range 请求（小块数据可靠），保证数据完整性。
                         val BLOCK = 256 * 1024
@@ -760,8 +763,9 @@ object PatchManager {
                                     val input = conn.inputStream
                                     val buf = ByteArray(128 * 1024)
                                     var localPos = pos
-                                    // 块级硬超时：防止 read() 半开连接无限阻塞导致"卡住"
-                                    val blockDeadline = System.currentTimeMillis() + 15000L
+                                    // 块级硬超时：防止 read() 半开连接无限阻塞导致"卡住"。
+                                    // 慢连接（<100KB/s）256KB 块可能超过 15 秒，放宽到 40 秒。
+                                    val blockDeadline = System.currentTimeMillis() + 40000L
                                     while (localPos <= blockEnd && System.currentTimeMillis() < blockDeadline) {
                                         if (com.miolauncher.app.UpdateDownloadService.isCancelRequested()) break
                                         val remaining = blockEnd - localPos + 1
@@ -813,7 +817,11 @@ object PatchManager {
             }
             // 进度上报（主线程 Handler 回调由调用方转）
             val lastReport = java.util.concurrent.atomic.AtomicLong(0L)
-            val waitDeadline = System.currentTimeMillis() + 240000L  // 总超时 4 分钟
+            // 总超时：按文件大小估算（最低 50KB/s），上限 30 分钟。
+            // 腾讯云出口仅 ~350KB/s，290MB 全量包需 8~14 分钟，固定 4 分钟会提前判失败
+            // （保留 tmp 断点，重试可续传，但首次体验就是"下载失败"）。
+            val waitTimeoutSec = (total / 51200L).coerceIn(240L, 1800L)
+            val waitDeadline = System.currentTimeMillis() + waitTimeoutSec * 1000L
             while (completed.get() < tasks.size) {
                 if (com.miolauncher.app.UpdateDownloadService.isCancelRequested()) {
                     pool.shutdownNow()
@@ -867,7 +875,7 @@ object PatchManager {
                                 val buf = ByteArray(128 * 1024)
                                 var localPos = pos
                                 // repair 也加块级硬超时防卡住
-                                val repairDeadline = System.currentTimeMillis() + 15000L
+                                val repairDeadline = System.currentTimeMillis() + 40000L
                                 while (localPos <= blockEnd && System.currentTimeMillis() < repairDeadline) {
                                     val remaining = blockEnd - localPos + 1
                                     val want = minOf(buf.size, remaining.toInt())
@@ -920,7 +928,7 @@ object PatchManager {
         val conn = URL("$base/api/app/latest.apk").openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
         conn.connectTimeout = 8000
-        conn.readTimeout = 8000
+        conn.readTimeout = 20000
         conn.setRequestProperty("Authorization", authHeader())
         conn.setRequestProperty("User-Agent", "MioLauncher/updater")
         conn.setRequestProperty("Range", "bytes=$start-$end")

@@ -21,11 +21,13 @@ android {
         applicationId = "com.miolauncher.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 25
-        versionName = "0.1.4-19"
+        versionCode = 26
+        versionName = "0.1.4-20"
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            // 只打 arm64-v8a：APK 从 ~290MB 降到 ~110MB，公网全量下载时间减半。
+            // 代价：不支持老 32 位手机(armeabi-v7a)与 x86 模拟器(x86_64)。
+            abiFilters += listOf("arm64-v8a")
         }
     }
 
