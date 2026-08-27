@@ -117,7 +117,7 @@ public final class JRE {
     public static void extractRuntime(Context context) throws Exception {
         File dir = getRuntimeDir(context);
         String[] files = {
-                "runtime/lwjgl.jar", "runtime/lwjglx.jar", "runtime/MioLibPatcher.jar", "runtime/OshiPatch.jar", "runtime/MioExitAgent.jar", "runtime/DumpAgent.jar",
+                "runtime/lwjgl.jar", "runtime/lwjglx.jar", "runtime/MioLibPatcher.jar", "runtime/OshiPatch.jar", "runtime/OshiFix.jar", "runtime/MioExitAgent.jar", "runtime/DumpAgent.jar",
                 "runtime/authlib-injector.jar",
                 "runtime/caciocavallo17/cacio-agent.jar",
                 "runtime/caciocavallo17/cacio-shared-1.19.1-SNAPSHOT.jar",
@@ -557,6 +557,10 @@ public final class JRE {
         List<String> fullArgs = new ArrayList<>();
         fullArgs.add(jre + "/lib/java");
         fullArgs.add("-Djava.home=" + jre);
+        // 直接传 -Dsun.jnu.encoding 而非仅 JAVA_TOOL_OPTIONS：进程内 VMLauncher 可能不走
+        // JLI 读取 JAVA_TOOL_OPTIONS，导致 native 编码未初始化（InetAddress 查询
+        // "platform encoding not initialized" InternalError，Realms 后台线程崩溃）。
+        fullArgs.add("-Dsun.jnu.encoding=UTF-8");
         fullArgs.addAll(args);
         System.out.println("MioJRE: launching Java program: " + String.join(" ", args));
         return com.oracle.dalvik.VMLauncher.launchJVM(fullArgs.toArray(new String[0]));
