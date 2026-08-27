@@ -350,7 +350,7 @@ public final class GameLaunch {
         extra.add("-XX:ErrorFile=" + new File(gameDir, "hs_err_%p.log").getAbsolutePath());
         extra.add("-Djava.library.path=" + jreHome.getAbsolutePath() + "/lib"
                 + ":" + context.getApplicationInfo().nativeLibraryDir);
-        extra.add("-Dorg.lwjgl.opengl.libname=" + renderer.getGlLibName());
+        extra.add("-Dorg.lwjgl.opengl.libname=" + context.getApplicationInfo().nativeLibraryDir + "/" + renderer.getGlLibName());
         extra.add("-Dorg.lwjgl.freetype.libname=" + context.getApplicationInfo().nativeLibraryDir + "/libfreetype.so");
         extra.add("-Dorg.lwjgl.spvc.libname=spirv-cross-c-shared");
         // FCL 全套 AWT/Cacio 配置（Caciocavallo 纯 Java AWT，替 Android 提供 java.awt）
@@ -442,16 +442,15 @@ public final class GameLaunch {
         extra.add("-Dsodium.checks.issue2561=false");
         extra.add("-Dfml.earlyprogresswindow=false");
         extra.add("-Dfml.ignoreInvalidMinecraftCertificates=true");
-        extra.add("-Dfml.ignorePatchDiscrepancies=true");
-        extra.add("-Dfile.encoding=UTF-8");
-        extra.add("-Dstdout.encoding=UTF-8");
-        extra.add("-Dstderr.encoding=UTF-8");
-        // Java 18+ 的 file.encoding 不再自动映射 sun.jnu.encoding/native.encoding，
-        // 不设会在 DNS 解析（InetAddress）时报 "platform encoding not initialized"。
-        extra.add("-Dsun.jnu.encoding=UTF-8");
-        extra.add("-Dnative.encoding=UTF-8");
-        // 对齐 FCL：java.io.tmpdir（Android 无 /tmp）、os、用户 locale、JNA
-        File cacheDir = new File(context.getCacheDir(), "miojvm");
+         extra.add("-Dfml.ignorePatchDiscrepancies=true");
+         // Java 21 (JEP 400) 默认 file.encoding=UTF-8，显式 -Dfile.encoding 反而会
+         // 干扰 NativeCoding 的 native 初始化，触发 "platform encoding not initialized"
+         // （NetworkInterface.getMacAddr0 → netty DefaultChannelId 崩溃）。故不设 file.encoding，
+         // 只显式指定 sun.jnu.encoding/native.encoding。
+         extra.add("-Dsun.jnu.encoding=UTF-8");
+         extra.add("-Dnative.encoding=UTF-8");
+         // 对齐 FCL：java.io.tmpdir（Android 无 /tmp）、os、用户 locale、JNA
+         File cacheDir = new File(context.getCacheDir(), "miojvm");
         cacheDir.mkdirs();
         extra.add("-Djava.io.tmpdir=" + cacheDir.getAbsolutePath());
         extra.add("-Dos.name=Linux");
@@ -470,6 +469,10 @@ public final class GameLaunch {
         extra.add("-Djna.tmpdir=" + cacheDir.getAbsolutePath());
         extra.add("-Dorg.lwjgl.system.SharedLibraryExtractPath=" + cacheDir.getAbsolutePath());
         extra.add("-Dio.netty.native.workdir=" + cacheDir.getAbsolutePath());
+        // 固定 netty machineId：Netty DefaultChannelId 初始化会调 NetworkInterface.getMacAddr0()，
+        // 在 Android 的 Java 21 上触发 "platform encoding not initialized"（InternalError）崩溃。
+        // 设固定 machineId（16字节hex）跳过 MAC 地址获取，世界加载不再崩溃。
+        extra.add("-Dio.netty.machineId=00:0a:95:9d:68:16");
         extra.add("-Dloader.disable_forked_guis=true");
         extra.add("-Djdk.lang.Process.launchMechanism=FORK");
         // Android 无 /etc/resolv.conf，为 JVM 提供 DNS 解析（对齐 FCL -Dext.net.resolvPath）

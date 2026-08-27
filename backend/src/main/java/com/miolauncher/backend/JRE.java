@@ -613,6 +613,17 @@ public final class JRE {
         Os.setenv("JAVA_HOME", jre, true);
         // POJAV_ENVIRON 不设置，让 env_init 构造函数自动创建 pojav_environ
         // （若设为空串，strtoul("") 会得到 NULL，导致第二次加载崩溃）。
+        // MioLauncher: 通过 JAVA_TOOL_OPTIONS 在 JVM 最早初始化时设置 sun.jnu.encoding。
+        // 直接命令行 -D 在 Android adhoc JRE 21 上对 native 编码初始化无效，
+        // NetworkInterface.getMacAddr0 → netty DefaultChannelId 会抛
+        // "platform encoding not initialized"（InternalError）。JLI_Launch 在属性解析
+        // 前读取 JAVA_TOOL_OPTIONS，能正确初始化 native 编码。
+        String existingToolOptions = System.getenv("JAVA_TOOL_OPTIONS");
+        String toolOptions = "-Dsun.jnu.encoding=UTF-8 -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8";
+        if (existingToolOptions != null && !existingToolOptions.isEmpty()) {
+            toolOptions = toolOptions + " " + existingToolOptions;
+        }
+        Os.setenv("JAVA_TOOL_OPTIONS", toolOptions, true);
 
         // 渲染后端：按所选 Renderer 配置 EGL / OpenGL ES 环境。
         Os.setenv("AMETHYST_RENDERER", renderer.getAmethystRenderer(), true);
@@ -637,6 +648,11 @@ public final class JRE {
                 }
             }
             Os.setenv("MG_DIR_PATH", mgDir.getAbsolutePath(), true);
+            // MobileGlues 的 native EGL 桥（gl_bridge.c gl_init_context）无条件
+            // strtol(getenv("LIBGL_ES")) 决定 EGL_CONTEXT_CLIENT_VERSION，缺省为 NULL 会
+            // SIGSEGV（StrToI）。MobileGlues 虽是 GLES 渲染，也必须提供 LIBGL_ES。
+            Os.setenv("LIBGL_ES", Integer.toString(renderer.getGlEsVersion()), true);
+            Os.setenv("LIBGL_GL", renderer.getGlVersionCode(), true);
         }
 
         if (renderer.isGl4es()) {
@@ -651,8 +667,9 @@ public final class JRE {
             // 也会填满 EGL 缓冲队列导致 eglSwapBuffers 阻塞（渲染线程卡死）。
             Os.setenv("LIBGL_FEATURES", "-BLITFULLSCREEN", true);
             Os.setenv("LIBGL_USE_MC_COLOR", "1", true);
-        } else {
+        } else if (!renderer.isMobileGlues()) {
             // ANGLE / OSMesa：不经 gl4es，无需 LIBGL_* 系列
+            // 注意：MobileGlues 已在上面设置了 LIBGL_ES（gl_bridge.c 需要），不能 unset。
             Os.unsetenv("LIBGL_ES");
             Os.unsetenv("LIBGL_GL");
             Os.unsetenv("LIBGL_NORMALIZE");

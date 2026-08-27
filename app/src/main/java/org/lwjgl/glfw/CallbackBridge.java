@@ -357,6 +357,12 @@ public class CallbackBridge {
         return metrics.density * LauncherPreferences.PREF_SCALE_FACTOR;
     }
 
+    // LWJGL 3.3.6 的 GLFW.<clinit> 直接调用 nativeGetAndroidDPI()（native 方法），
+    // jni 层（input_bridge_v3.c）有对应实现，内部回调上面的 Java getAndroidDPI()。
+    // 此 native 声明缺失会导致 NoSuchMethodError: nativeGetAndroidDPI()。
+    // 注意：不能加 @CriticalNative——jni 实现访问 Java 堆（CallStaticFloatMethod）。
+    public static native float nativeGetAndroidDPI();
+
     @Keep @CriticalNative public static native void nativeSetUseInputStackQueue(boolean useInputStackQueue);
 
     @Keep @CriticalNative private static native boolean nativeSendChar(char codepoint);
