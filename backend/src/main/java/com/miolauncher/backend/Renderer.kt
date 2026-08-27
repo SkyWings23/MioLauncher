@@ -49,7 +49,9 @@ enum class Renderer(
         label = "MobileGlues（兼容最佳）",
         glLibName = "libmobileglues.so",
         eglLibName = "libmobileglues.so",
-        amethystRenderer = "opengles",
+        // 关键：必须匹配 GLFW.java 识别的 "opengles_mobileglues"（否则 GLFW 用默认 GL 3.3，
+        // 与 MobileGlues 的 GL 4.0 冲突，导致 GL.createCapabilities 失败 / Backend API Unknown）。
+        amethystRenderer = "opengles_mobileglues",
         glEsVersion = 3,
         glVersionCode = "31",
         isGl4es = false,
