@@ -208,6 +208,7 @@ fun LaunchSettingsScreen(
                                         Renderer.NGGL4ES -> "默认，gl4es 直通系统 EGL，兼容性最好"
                                         Renderer.GL4ES -> "与默认同库但强制 GLES2，适合旧设备"
                                         Renderer.MOBILEGLUES -> "MobileGlues，Mali/Adreno 兼容最佳（1.17+）"
+                                        Renderer.ZINK -> "Mesa Zink 经 Vulkan 渲染桌面 GL（Adreno 推荐，实验性）"
                                     },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,

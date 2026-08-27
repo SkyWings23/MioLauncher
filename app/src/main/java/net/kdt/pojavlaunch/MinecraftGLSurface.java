@@ -1,7 +1,6 @@
 package net.kdt.pojavlaunch;
 
 import static net.kdt.pojavlaunch.MainActivity.touchCharInput;
-import static net.kdt.pojavlaunch.Tools.LOCAL_RENDERER;
 import static net.kdt.pojavlaunch.prefs.LauncherPreferences.PREF_MOUSE_GRAB_FORCE;
 import static net.kdt.pojavlaunch.utils.MCOptionUtils.getMcScale;
 import static org.lwjgl.glfw.CallbackBridge.sendMouseButton;
@@ -103,7 +102,7 @@ public class MinecraftGLSurface extends View implements GrabListener {
         // FIXME: LWJGL3ify 3.x does not like when surface randomly dies on SurfaceView
         // (it doesnt swap to 1x1 pbuffer cause it uses sdl for swap instead of glfw)
         try {
-            useSurfaceView = useSurfaceView && !LOCAL_RENDERER.equals("opengles3_desktopgl_zink_kopper") &&
+            useSurfaceView = useSurfaceView && !Tools.getLocalRenderer().equals("opengles3_desktopgl_zink_kopper") &&
                     !Tools.hasMods("angelica") &&
                     !Tools.hasMods("lwjgl3ify-3");
         } catch (NullPointerException ignored){}

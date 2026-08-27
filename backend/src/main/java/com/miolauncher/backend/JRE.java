@@ -662,6 +662,31 @@ public final class JRE {
             Os.unsetenv("LIBGL_USE_MC_COLOR");
         }
 
+        // Zink：Mesa EGL(Kopper) 经 Vulkan 渲染桌面 OpenGL。
+        // GALLIUM_DRIVER / MESA_ANDROID_NO_KMS_SWRAST 由 egl_bridge.c 原生设置。
+        if (renderer == Renderer.ZINK) {
+            Os.setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", true);
+            Os.setenv("MESA_GL_VERSION_OVERRIDE", "4.6COMPAT", true);
+            Os.setenv("MESA_GLSL_VERSION_OVERRIDE", "460", true);
+            File mesaCache = new File(context.getCacheDir(), "mesa");
+            mesaCache.mkdirs();
+            Os.setenv("MESA_GLSL_CACHE_DIR", mesaCache.getAbsolutePath(), true);
+            // Turnip 加载需 API 28+（egl_bridge.c 同样限制）；Adreno 设备启用，其余走系统 Vulkan
+            boolean adreno = Build.HARDWARE != null
+                    && Build.HARDWARE.toLowerCase(java.util.Locale.ROOT).contains("qcom");
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && adreno) {
+                Os.setenv("POJAV_LOAD_TURNIP", "1", true);
+            } else {
+                Os.unsetenv("POJAV_LOAD_TURNIP");
+            }
+        } else {
+            Os.unsetenv("MESA_LOADER_DRIVER_OVERRIDE");
+            Os.unsetenv("MESA_GL_VERSION_OVERRIDE");
+            Os.unsetenv("MESA_GLSL_VERSION_OVERRIDE");
+            Os.unsetenv("MESA_GLSL_CACHE_DIR");
+            Os.unsetenv("POJAV_LOAD_TURNIP");
+        }
+
         // 通用 env：native 库目录 + spirv-cross（着色器编译）+ TMPDIR
         Os.setenv("POJAV_NATIVEDIR", nativeDir, true);
         Os.setenv("DRIVER_PATH", nativeDir, true);
