@@ -28,11 +28,11 @@ object LogUploader {
     const val BASIC_PASS = "mio_admin_2024"
 
     /** 内置候选域名（首个是"当前主域名"，其余为备用）。
-     *  含手机隧道（eff15fa，手机常开作稳定锚点）+ 平板隧道。
+     *  含腾讯云 COS 高速分发 + 腾讯云主服务器。
      *  首次连接用这些兜底，连上后从 /api/endpoints 拉最新列表并持久化。 */
     const val BUILTIN_ENDPOINTS =
-        "https://eff15fa.r7.cpolar.cn,https://7fff14ba.r15.cpolar.top," +
-        "https://2c93de49.r15.cpolar.top,https://1673320a.r15.cpolar.top,https://ba71887.r15.cpolar.top"
+        "https://mio-apk-1407455260.cos.ap-guangzhou.myqcloud.com," +
+        "https://124.223.39.80:8787"
 
     private const val PREF = "mio_log_uploader"
     private const val KEY_ENDPOINTS = "endpoints"
