@@ -32,7 +32,18 @@ public class Tools {
     public static final String CTRLMAP_PATH = "/storage/emulated/0/MioLauncher/controlmap/";
     public static final String DIR_GAME_HOME = DIR_DATA + "/files/.minecraft";
     public static final String DIR_GAME_NEW = DIR_DATA + "/files/mio/game";
-    public static final String LOCAL_RENDERER = "opengles3";
+    /**
+     * 当前渲染器名（即 AMETHYST_RENDERER 环境变量），启动游戏前由 JRE 写入。
+     * 默认 opengles3。运行时读取以支持 Zink 等 Kopper 渲染器的分支逻辑。
+     */
+    public static String getLocalRenderer() {
+        try {
+            String r = System.getenv("AMETHYST_RENDERER");
+            return (r == null || r.isEmpty()) ? "opengles3" : r;
+        } catch (Throwable t) {
+            return "opengles3";
+        }
+    }
 
     public static DisplayMetrics currentDisplayMetrics = new DisplayMetrics();
 

@@ -56,3 +56,23 @@ clang \
   "$SYSROOT/usr/lib/aarch64-linux-android/26/crtend_so.o"
 
 echo "OK: $OUT"
+
+# liblinkerhook.so：Turnip 加载辅助（egl_bridge.c 通过它把自定义驱动句柄
+# 注入 android_dlopen_ext / sphal 命名空间）。源码 driver_helper/hook.c。
+HOOK_OUT="$ROOT/src/main/jniLibs/arm64-v8a/liblinkerhook.so"
+
+clang \
+  --target=aarch64-linux-android26 \
+  --sysroot="$SYSROOT" \
+  -nostdlib \
+  -fPIC -shared -O2 \
+  -I "$AMETHYST_JNI/driver_helper" \
+  -o "$HOOK_OUT" \
+  "$AMETHYST_JNI/driver_helper/hook.c" \
+  "$SYSROOT/usr/lib/aarch64-linux-android/26/crtbegin_so.o" \
+  -L"$SYSROOT/usr/lib/aarch64-linux-android/26" \
+  -lc -lm \
+  -l:libclang_rt.builtins-aarch64-android.a \
+  "$SYSROOT/usr/lib/aarch64-linux-android/26/crtend_so.o"
+
+echo "OK: $HOOK_OUT"

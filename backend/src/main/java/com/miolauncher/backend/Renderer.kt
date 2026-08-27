@@ -5,11 +5,12 @@ package com.miolauncher.backend
  * - NGGL4ES：默认，gl4es 直通系统 EGL（通用性最好，已充分验证）
  * - GL4ES：兼容档，与默认同用 ng_gl4es（对齐 FCL 的 opengles2），强制 GLES2
  * - MOBILEGLUES：MobileGlues（Mali/Adreno GPU 兼容性最佳，对齐 FCL 的 opengles_mobileglues）
+ * - ZINK：Mesa Zink 经 Vulkan 渲染桌面 OpenGL（Kopper 窗口系统），
+ *   Adreno 走 Turnip 驱动、其余走系统 Vulkan；仅 arm64-v8a 打包了 Mesa 运行时
  *
  * 说明：
- * - native EGL 桥（egl_bridge.c）只识别以 "opengles" 开头的 renderer 名。
- * - ANGLE（libGLESv2_angle.so）在此构建的原生桥下 eglCreateContext 崩溃，
- *   OSMesa（libOSMesa_81.so）不导出标准 EGL 符号，二者都无法工作，故不提供。
+ * - native EGL 桥（egl_bridge.c）识别 "opengles*" 前缀 renderer 名，
+ *   其中 opengles3_desktopgl_zink_kopper 走 Mesa EGL 分支。
  */
 enum class Renderer(
     val id: String,
@@ -54,6 +55,17 @@ enum class Renderer(
         glVersionCode = "31",
         isGl4es = false,
         isMobileGlues = true,
+    ),
+    ZINK(
+        id = "zink",
+        label = "Zink（Vulkan 桌面 GL）",
+        glLibName = "libglxshim.so",
+        eglLibName = "libEGL_mesa.so",
+        amethystRenderer = "opengles3_desktopgl_zink_kopper",
+        glEsVersion = 3,
+        glVersionCode = "46",
+        isGl4es = false,
+        isMobileGlues = false,
     ),
     ;
 
