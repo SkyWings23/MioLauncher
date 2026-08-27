@@ -121,6 +121,11 @@ fun MioApp() {
             }
             if (report != null) {
                 crashReport = report
+                // mg 渲染器崩溃 → 下次启动自动回退 NGGL4ES（保证能进游戏）
+                val lastRenderer = com.miolauncher.app.data.LaunchSettingsStore.lastLaunchRenderer(context)
+                if (lastRenderer == com.miolauncher.backend.Renderer.MOBILEGLUES.id) {
+                    com.miolauncher.app.data.LaunchSettingsStore.setRendererFallback(context, true)
+                }
                 // 自动分析日志并给出处理建议
                 crashDiagnoses = withContext(Dispatchers.IO) {
                     com.miolauncher.backend.GameLogAnalyzer.analyzeGameLogs(context)

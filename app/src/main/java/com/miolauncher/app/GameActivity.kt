@@ -719,6 +719,29 @@ class GameActivity : ComponentActivity() {
                     val ndir = applicationInfo.nativeLibraryDir
                     val settings = launchSettings
                     val renderer = settings.renderer
+                    // 记录本次实际渲染器（供崩溃后自动回退判断）
+                    com.miolauncher.app.data.LaunchSettingsStore.recordLaunchRenderer(this@GameActivity, renderer.id)
+                    // MobileGlues：必须在 dlopen 前设好 MG_DIR_PATH，否则 mg 在 dlopen 时读到
+                    // 兜底 /sdcard/MG（JRE.setEnvironment 太晚，来不及）。同时写 config.json。
+                    if (renderer.isMobileGlues) {
+                        val mgDir = java.io.File(this@GameActivity.filesDir, "mio/MobileGlues")
+                        mgDir.mkdirs()
+                        val mgCfg = java.io.File(mgDir, "config.json")
+                        if (!mgCfg.isFile()) {
+                            try {
+                                mgCfg.writeText(
+                                    "{\"enableANGLE\":0,\"enableNoError\":0,\"fsr1Setting\":0," +
+                                        "\"enableExtComputeShader\":0,\"angleDepthClearFixMode\":0," +
+                                        "\"enableExtTimerQuery\":0,\"enableExtDirectStateAccess\":0," +
+                                        "\"multidrawMode\":0,\"maxGlslCacheSize\":128}",
+                                )
+                            } catch (_: Throwable) {
+                            }
+                        }
+                        android.system.Os.setenv("MG_DIR_PATH", mgDir.absolutePath, true)
+                        android.system.Os.setenv("LIBGL_ES", renderer.glEsVersion.toString(), true)
+                        android.system.Os.setenv("LIBGL_GL", renderer.glVersionCode, true)
+                    }
                     // 按渲染后端预载对应 GL 库（ANGLE/OSMesa 已移除，仅 gl4es 家族）
                     android.util.Log.d("GameActivity", "launch: renderer=${renderer.id} (${renderer.glLibName})")
                     net.kdt.pojavlaunch.utils.JREUtils.dlopen("$ndir/${renderer.glLibName}")

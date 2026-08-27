@@ -24,6 +24,33 @@ object LaunchSettingsStore {
     private const val KEY_PARTICLES = "launch_particles"
     private const val KEY_JVM_ARGS = "launch_jvm_args"
     private const val KEY_EXT_MEMORY = "launch_ext_memory"
+    private const val KEY_LAST_RENDERER = "last_launch_renderer"
+    private const val KEY_RENDERER_FALLBACK = "renderer_fallback"
+
+    /** 记录本次实际使用的渲染器（供崩溃后判断是否回退） */
+    fun recordLaunchRenderer(context: Context, rendererId: String) {
+        context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .edit().putString(KEY_LAST_RENDERER, rendererId).apply()
+    }
+
+    /** 上次启动用的渲染器 */
+    fun lastLaunchRenderer(context: Context): String? =
+        context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .getString(KEY_LAST_RENDERER, null)
+
+    /** 设置渲染器回退标记（mg 崩溃后，下次启动自动用 NGGL4ES 保证能进游戏） */
+    fun setRendererFallback(context: Context, enable: Boolean) {
+        context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_RENDERER_FALLBACK, enable).apply()
+    }
+
+    /** 消费回退标记（一次性）：已设置则返回 true 并清除 */
+    fun consumeRendererFallback(context: Context): Boolean {
+        val sp = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+        if (!sp.getBoolean(KEY_RENDERER_FALLBACK, false)) return false
+        sp.edit().putBoolean(KEY_RENDERER_FALLBACK, false).apply()
+        return true
+    }
 
     /** 按 GPU/CPU 厂商推荐默认渲染器：
      * Mali（联发科/部分麒麟）与 Adreno（高通）用 MobileGlues 兼容性最佳（官方注释），
@@ -38,7 +65,11 @@ object LaunchSettingsStore {
 
     fun load(context: Context): LaunchSettings {
         val sp = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-        val renderer = Renderer.fromId(sp.getString(KEY_RENDERER, recommendedRenderer().id))
+        var renderer = Renderer.fromId(sp.getString(KEY_RENDERER, recommendedRenderer().id))
+        // 自动回退：上次 mg 崩溃后，本次强制用 NGGL4ES（保证能进游戏），用户手动改回 mg 时重新生效
+        if (consumeRendererFallback(context)) {
+            renderer = Renderer.NGGL4ES
+        }
         val profile = runCatching {
             PerfProfile.valueOf(sp.getString(KEY_PROFILE, PerfProfile.LOW.name) ?: PerfProfile.LOW.name)
         }.getOrDefault(PerfProfile.LOW)
