@@ -21,8 +21,8 @@ android {
         applicationId = "com.miolauncher.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 29
-        versionName = "0.1.4-23"
+        versionCode = 30
+        versionName = "0.1.4-24"
 
         ndk {
             // 只打 arm64-v8a：APK 从 ~290MB 降到 ~110MB，公网全量下载时间减半。
