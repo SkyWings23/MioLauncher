@@ -657,7 +657,7 @@ object PatchManager {
         val tmp = File(dest.parentFile, dest.name + ".tmp")
         try {
             // 探测服务器 Range 支持与文件大小
-            val probe = URL("$base/api/app/latest.apk").openConnection() as HttpURLConnection
+            val probe = URL("$base/api/app/latest").openConnection() as HttpURLConnection
             probe.requestMethod = "GET"
             probe.connectTimeout = 15000
             probe.readTimeout = 15000
@@ -684,7 +684,7 @@ object PatchManager {
             val probeFutures = endpoints.map { ep ->
                 probePool.submit {
                     try {
-                        val c = URL("$ep/api/app/latest.apk").openConnection() as HttpURLConnection
+                        val c = URL("$ep/api/app/latest").openConnection() as HttpURLConnection
                         c.requestMethod = "GET"
                         c.connectTimeout = 5000
                         c.readTimeout = 5000
@@ -710,7 +710,7 @@ object PatchManager {
             val speedFutures = alive.map { ep ->
                 speedPool.submit {
                     try {
-                        val c = URL("$ep/api/app/latest.apk").openConnection() as HttpURLConnection
+                        val c = URL("$ep/api/app/latest").openConnection() as HttpURLConnection
                         c.requestMethod = "GET"
                         c.connectTimeout = 6000
                         c.readTimeout = 12000
@@ -974,7 +974,7 @@ object PatchManager {
 
     /** 打开带 Range 头的连接（返回 206 或 200）。 */
     private fun openRange(base: String, start: Long, end: Long): HttpURLConnection {
-        val conn = URL("$base/api/app/latest.apk").openConnection() as HttpURLConnection
+        val conn = URL("$base/api/app/latest").openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
         conn.connectTimeout = 8000
         conn.readTimeout = 20000
