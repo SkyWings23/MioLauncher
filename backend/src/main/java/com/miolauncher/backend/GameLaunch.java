@@ -495,6 +495,13 @@ public final class GameLaunch {
         if (oshiPatch.isFile() && javaMajor >= 9) {
             extra.add("-javaagent:" + oshiPatch.getAbsolutePath());
         }
+        // OshiFix：oshi 的 LinuxCentralProcessor.readTopologyFromSysfs 会递归遍历
+        // /sys/devices/system/cpu/，Android 上 bus_dcvs/DDR/cur_freq 权限拒绝 →
+        // UncheckedIOException 导致游戏启动崩溃。此代理把该方法整体包 try-catch 吞掉。
+        File oshiFix = new File(runtimeDir, "OshiFix.jar");
+        if (oshiFix.isFile() && javaMajor >= 9) {
+            extra.add("-javaagent:" + oshiFix.getAbsolutePath());
+        }
         // MioLauncher: 干净退出清理 agent——游戏正常退出时删除崩溃标记，避免误报崩溃；
         // 真实崩溃（信号）不跑 shutdown hook，标记保留供启动时检测。
         // Java 8：MioExitAgent 为 Java 17 字节码无法加载，跳过。
