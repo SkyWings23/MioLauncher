@@ -41,10 +41,25 @@ public class CallbackBridge {
     public volatile static boolean holdingAlt, holdingCapslock, holdingCtrl,
             holdingNumlock, holdingShift;
 
-    public static final ByteBuffer sGamepadButtonBuffer;
-    public static final FloatBuffer sGamepadAxisBuffer;
+    public static ByteBuffer sGamepadButtonBuffer;
+    public static FloatBuffer sGamepadAxisBuffer;
     public static boolean sGamepadDirectInput = false;
     private static int sMouseButtonState = 0;
+
+    /** 延迟初始化 gamepad 缓冲：<clinit> 不调 native（避免 pojavexec JNI_OnLoad FindClass 递归） */
+    public static ByteBuffer getGamepadButtonBuffer() {
+        if (sGamepadButtonBuffer == null) {
+            sGamepadButtonBuffer = nativeCreateGamepadButtonBuffer();
+        }
+        return sGamepadButtonBuffer;
+    }
+
+    public static FloatBuffer getGamepadAxisBuffer() {
+        if (sGamepadAxisBuffer == null) {
+            sGamepadAxisBuffer = createGamepadAxisBuffer();
+        }
+        return sGamepadAxisBuffer;
+    }
 
     public static void putMouseEventWithCoords(int button, float x, float y) {
         putMouseEventWithCoords(button, true, x, y);
@@ -378,9 +393,11 @@ public class CallbackBridge {
     private static native ByteBuffer nativeCreateGamepadButtonBuffer();
     private static native ByteBuffer nativeCreateGamepadAxisBuffer();
     static {
-        System.loadLibrary("pojavexec");
-        sGamepadButtonBuffer = nativeCreateGamepadButtonBuffer();
-        sGamepadAxisBuffer = createGamepadAxisBuffer();
+        // 注意：<clinit> 里不能 System.loadLibrary("pojavexec") / 调 native——
+        // pojavexec 的 JNI_OnLoad 会 FindClass(org/lwjgl/glfw/CallbackBridge)，
+        // 若本类正在 <clinit> 中加载 pojavexec → 同线程递归初始化 →
+        // ExceptionInInitializerError（GameActivity 启动闪退）。
+        // pojavexec 由 MioApplication.onCreate 提前加载；gamepad 缓冲延迟到首次使用。
     }
 }
 

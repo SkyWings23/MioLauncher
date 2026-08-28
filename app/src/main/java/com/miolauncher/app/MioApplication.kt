@@ -11,6 +11,14 @@ class MioApplication : Application() {
         super.onCreate()
         appContext = this
 
+        // 提前加载 pojavexec：其 JNI_OnLoad 会 FindClass(CallbackBridge)。
+        // 若等 CallbackBridge.<clinit> 再 loadLibrary，JNI_OnLoad 的 FindClass 会触发
+        // 同线程递归初始化 → ExceptionInInitializerError。这里先加载并完成 native 注册。
+        try {
+            System.loadLibrary("pojavexec")
+        } catch (_: Throwable) {
+        }
+
         // 启动时主动回收内存（上次可能因下载/游戏崩溃残留大量对象），
         // 降低"下载版本闪退后无法进入启动器"的内存压力。
         try {
