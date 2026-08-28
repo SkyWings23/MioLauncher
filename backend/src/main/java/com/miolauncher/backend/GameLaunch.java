@@ -260,6 +260,10 @@ public final class GameLaunch {
         JRE.extractRuntime(context);
         File runtimeDir = JRE.getRuntimeDir(context);
         File lwjglJar = new File(runtimeDir, "lwjgl.jar");
+        // zipfs：Android adhoc JRE 的 jdk.zipfs 非根模块不解析，游戏 FileSystems.getFileSystem("jar")
+        // 抛 ProviderNotFoundException: Provider "jar" not found。用自定义 zipfs.jar 前置 classpath
+        // 提供 jdk.nio.zipfs.ZipFileSystemProvider（ServiceLoader 自动注册）。
+        File zipfsJar = new File(runtimeDir, "zipfs.jar");
         File mioLibPatcher = new File(runtimeDir, "MioLibPatcher.jar");
         File mioExitAgent = new File(runtimeDir, "MioExitAgent.jar");
 
@@ -553,7 +557,11 @@ public final class GameLaunch {
                 // 用 FCL 的 lwjgl.jar 前置 classpath，覆盖游戏自带 LWJGL。
                 if (javaMajor >= 9) {
                     args.add(arg);
-                    args.add(lwjglJar.getAbsolutePath() + java.io.File.pathSeparator + dedupeClasspath(src.get(i + 1)));
+                    String pre = lwjglJar.getAbsolutePath();
+                    if (zipfsJar.isFile()) {
+                        pre = pre + java.io.File.pathSeparator + zipfsJar.getAbsolutePath();
+                    }
+                    args.add(pre + java.io.File.pathSeparator + dedupeClasspath(src.get(i + 1)));
                 } else {
                     // Java 8 老版本（如 Beta 1.0）用 LWJGL 2。保持原 classpath（含游戏自带 LWJGL2），
                     // 末尾追加 FCL 的 lwjglx.jar（LWJGL2→LWJGL3 桥接），使老版本能跑在 Android 的 LWJGL3 上。

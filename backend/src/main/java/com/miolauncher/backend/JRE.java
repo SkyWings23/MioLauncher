@@ -117,7 +117,7 @@ public final class JRE {
     public static void extractRuntime(Context context) throws Exception {
         File dir = getRuntimeDir(context);
         String[] files = {
-                "runtime/lwjgl.jar", "runtime/lwjglx.jar", "runtime/MioLibPatcher.jar", "runtime/OshiPatch.jar", "runtime/OshiFix.jar", "runtime/MioExitAgent.jar", "runtime/DumpAgent.jar",
+                "runtime/lwjgl.jar", "runtime/lwjglx.jar", "runtime/zipfs.jar", "runtime/MioLibPatcher.jar", "runtime/OshiPatch.jar", "runtime/OshiFix.jar", "runtime/MioExitAgent.jar", "runtime/DumpAgent.jar",
                 "runtime/authlib-injector.jar",
                 "runtime/caciocavallo17/cacio-agent.jar",
                 "runtime/caciocavallo17/cacio-shared-1.19.1-SNAPSHOT.jar",
